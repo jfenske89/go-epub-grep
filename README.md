@@ -24,7 +24,7 @@ The tool was designed for maintainers and developers of self-hosted ePub managem
 
 ## CLI Usage
 
-The `epub-search` command provides a comprehensive interface for searching ePUB files:
+The `epub-search` command provides an interface for searching ePUB files:
 
 ### Basic Text Search
 
@@ -128,6 +128,24 @@ All CLI commands output structured JSON for easy integration:
 }
 ```
 
+## Docker
+
+### Building and Running with Docker
+
+```bash
+# Build the Docker image
+docker build -t ghcr.io/jfenske89/go-epub-grep:latest .
+
+# Run a search
+docker run --rm -it -v $(pwd)/public-domain:/books \
+      ghcr.io/jfenske89/go-epub-grep:latest \
+       search -d /books \
+      -p 'Holmes' \
+      --ignore-case \
+      --context 2 \
+      --pretty
+```
+
 ## Development
 
 ### Building and Testing
@@ -151,7 +169,7 @@ task build
 
 ### Testing
 
-The project includes comprehensive end-to-end tests:
+The project includes end-to-end tests:
 
 ```bash
 # Run the test suite with sample ePUBs
