@@ -8,62 +8,86 @@ A tool to search the content of ePub files. Also includes a Go library for advan
 
 ## Features
 
-- Search content within ePub files.
-- Regular expression support.
-- Metadata support: title, authors, series, identifiers (ISBN, ASIN, DOI).
-- High-performance multi-threaded processing for large collections.
-- Optionally filter results by author, title, series, or specific files.
-- Configurable context lines around matches for better readability.
-- Structured JSON output suitable for API integration and web applications.
+- Regular expression support
+- Metadata support: title, authors, series, identifiers (ISBN, ASIN, DOI)
+- High-performance multi-threaded processing for large collections
+- Optionally filter results by author, title, series, or specific files
+- Configurable context lines around matches for better readability
+- Structured JSON output suitable for API integration and web applications
 
 ## CLI Usage
 
-The `epub-search` command provides an interface for searching ePUB files:
-
-### Basic Text Search
+### Basic Search
 
 ```bash
 # Simple text search
-epub-search search -d /path/to/epubs -p "search term"
+epub-search search \
+  -d /path/to/epubs \
+  -p "search term"
 
 # Case-insensitive search with context
-epub-search search -d /path/to/epubs -p "Holmes" --ignore-case --context 2
+epub-search search \
+  -d /path/to/epubs \
+  -p "Holmes" \
+  --ignore-case \
+  --context 2
 ```
 
 ### Regular Expression Search
 
 ```bash
 # Regex pattern matching
-epub-search search -d /path/to/epubs -p "Holmes|Watson" --regex
+epub-search search \
+  -d /path/to/epubs \
+  -p "Holmes|Watson" \
+  --regex
 
 # Complex pattern with case sensitivity
-epub-search search -d /path/to/epubs -p "\b[A-Z][a-z]+\s+Holmes\b" --regex --context 1
+epub-search search \
+  -d /path/to/epubs \
+  -p "\b[A-Z][a-z]+\s+Holmes\b" \
+  --regex \
+  --context 1
 ```
 
 ### Metadata-Based Filtering
 
 ```bash
 # Search with metadata extraction
-epub-search search -d /path/to/epubs -p "mystery" --extract-metadata
+epub-search search \
+  -d /path/to/epubs \
+  -p "mystery" \
+  --extract-metadata
 
 # Filter by specific author
-epub-search search -d /path/to/epubs -p "detective" --extract-metadata --author "Arthur Conan Doyle"
+epub-search search \
+  -d /path/to/epubs \
+  -p "detective" \
+  --extract-metadata \
+  --author "Arthur Conan Doyle"
 
 # Filter by title and series
-epub-search search -d /path/to/epubs -p "London" --extract-metadata --title "A Study in Scarlet"
+epub-search search \
+  -d /path/to/epubs \
+  -p "London" \
+  --extract-metadata \
+  --title "A Study in Scarlet"
 ```
 
 ### Performance Options
 
 ```bash
 # Multi-threaded processing
-epub-search search -d /path/to/epubs -p "text" --threads 8
+epub-search search \
+  -d /path/to/epubs \
+  -p "text" \
+  --threads 8
 
 # Search specific files only
-epub-search search -d /path/to/epubs -p "pattern" --files-in "book1.epub,book2.epub"
-
-# Pretty-printed JSON output
-epub-search search -d /path/to/epubs -p "text" --pretty
+epub-search search \
+  -d /path/to/epubs \
+  -p "pattern" \
+  --files-in "book1.epub,book2.epub"
 ```
 
 ### Command-Line Options
@@ -85,7 +109,7 @@ epub-search search -d /path/to/epubs -p "text" --pretty
 
 ## Output Format
 
-All CLI commands output structured JSON for easy integration:
+All commands output structured JSON. Example:
 
 ```json
 {
@@ -146,6 +170,9 @@ task install-tools
 
 # Run tests
 task test
+
+# Run benchmarks
+task bench
 
 # Lint code
 task lint
