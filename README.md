@@ -4,23 +4,17 @@
   <img src="./logo.png" alt="Go ePUB grep" width="100" height="auto">
 </p>
 
-A text search tool for ePub collections, empowering you to search for specific quotes, passages, or terms across your digital library.
-
-This project was designed to be integrated into self-hosted ePub library applications.
+A CLI (and Go library) to search the content of ePub files.
 
 ## Features
 
-- **Text Search**: Search text content within ePub files (including HTML and plain text files).
-- **Regex Search**: Pattern matching with full regular expression support.
-- **Metadata Extraction**: Metadata support including title, authors, series, identifiers (ISBN, ASIN, DOI).
-- **Concurrent Processing**: High-performance multi-threaded processing for large collections.
-- **Optional Filtering**: Filter results by author, title, series, or specific files.
-- **Context-Aware Results**: Configurable context lines around matches for better readability.
-- **JSON Output**: Structured JSON output suitable for API integration and web applications.
-
-## Target Use Cases
-
-The tool was designed for maintainers and developers of self-hosted ePub management/reading projects who would benefit from advanced search capabilities.
+- Search content within ePub files.
+- Regular expression support.
+- Metadata support: title, authors, series, identifiers (ISBN, ASIN, DOI).
+- High-performance multi-threaded processing for large collections.
+- Optionally filter results by author, title, series, or specific files.
+- Configurable context lines around matches for better readability.
+- Structured JSON output suitable for API integration and web applications.
 
 ## CLI Usage
 
@@ -88,10 +82,6 @@ epub-search search -d /path/to/epubs -p "text" --pretty
 | `--title` | | Filter by title (requires --extract-metadata) | |
 | `--files-in` | | Filter to specific ePUB files | |
 | `--pretty` | | Pretty-print JSON output | |
-
-## Integration Guide
-
-- [CLI Integration](INTEGRATION.md)
 
 ## Output Format
 
