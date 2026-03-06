@@ -11,7 +11,7 @@ type regexCache struct {
 	mu       sync.RWMutex
 	cache    map[string]*regexp.Regexp
 	maxSize  int
-	accesses map[string]int // Track access frequency for LRU-like eviction
+	accesses map[string]int // Track access frequency for LFU-like eviction
 }
 
 // newRegexCache creates a new regex cache with the specified maximum size.
@@ -53,18 +53,18 @@ func (rc *regexCache) get(pattern string) (*regexp.Regexp, error) {
 		return nil, err
 	}
 
-	// Evict least recently used if at capacity
+	// Evict least frequently used if at capacity
 	if len(rc.cache) >= rc.maxSize {
-		var lruPattern string
+		var lfuPattern string
 		minAccess := int(^uint(0) >> 1) // Max int
 		for p, count := range rc.accesses {
 			if count < minAccess {
 				minAccess = count
-				lruPattern = p
+				lfuPattern = p
 			}
 		}
-		delete(rc.cache, lruPattern)
-		delete(rc.accesses, lruPattern)
+		delete(rc.cache, lfuPattern)
+		delete(rc.accesses, lfuPattern)
 	}
 
 	// Cache the compiled regex

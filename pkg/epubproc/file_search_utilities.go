@@ -89,7 +89,7 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 	pooledSc.reset(r)
 	scanner := pooledSc.scanner
 
-	// ise sliding window approach for memory efficiency
+	// use sliding window approach for memory efficiency
 	lines := make([]string, 0, 512) // pre-allocate for ~512 lines (reduces reallocations)
 	matches := make([]Match, 0, 16) // pre-allocate for expected matches
 	lineNum := 0
@@ -113,22 +113,10 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 		return matches
 	}
 
-	// for files with context, we need to track matched lines
-	matchedLines := make(map[int]bool)
-
 	// first pass: identify matching lines and build context
 	for scanner.Scan() {
 		line := scanner.Text()
 		lines = append(lines, line)
-
-		if pattern.MatchString(line) {
-			// mark this line and surrounding context for inclusion
-			start := max(lineNum-contextLines, 0)
-			end := min(lineNum+contextLines+1, len(lines))
-			for i := start; i < end; i++ {
-				matchedLines[i] = true
-			}
-		}
 		lineNum++
 	}
 
@@ -155,10 +143,7 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 
 // scanHTMLFile extracts text content from HTML and searches for pattern matches.
 func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, fileName string, contextLines int) []Match {
-	pooledTok := tokenizerPool.Get().(*pooledTokenizer)
-	defer tokenizerPool.Put(pooledTok)
-	pooledTok.reset(r)
-	z := pooledTok.tokenizer
+	tokenizer := html.NewTokenizer(r)
 	textLines := make([]string, 0, 256) // pre-allocate for ~256 lines (typical HTML file)
 	var currentLine strings.Builder
 	currentLine.Grow(512) // pre-allocate for typical line length
@@ -196,11 +181,11 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 		}
 		tokenCount++
 
-		tt := z.Next()
+		tt := tokenizer.Next()
 		if tt == html.ErrorToken {
 			// io.EOF is expected at the end of the file.
-			if z.Err() != io.EOF {
-				log.Error().Err(z.Err()).Str("file", fileName).Msg("error tokenizing html")
+			if tokenizer.Err() != io.EOF {
+				log.Error().Err(tokenizer.Err()).Str("file", fileName).Msg("error tokenizing html")
 			}
 			break
 		}
@@ -210,10 +195,10 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 			// add a space before the text to ensure separation between words from adjacent tags
 			// the final whitespace normalization will handle any extra spaces
 			currentLine.WriteString(" ")
-			currentLine.WriteString(string(z.Text()))
+			currentLine.WriteString(string(tokenizer.Text()))
 
 		case html.StartTagToken, html.EndTagToken, html.SelfClosingTagToken:
-			tagName, _ := z.TagName()
+			tagName, _ := tokenizer.TagName()
 			if isBlockLevelTag(string(tagName)) {
 				flushLine()
 			}

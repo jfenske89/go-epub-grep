@@ -17,6 +17,7 @@ import (
 
 	"github.com/rs/zerolog/log"
 	"github.com/sourcegraph/conc/pool"
+	"golang.org/x/text/encoding/ianaindex"
 )
 
 // MetadataHandler defines a handler function for epub metadata.
@@ -203,7 +204,12 @@ func (m *metadataExtractorImpl) ProcessFile(ctx context.Context, epubPath string
 	// some epubs have invalid charsets declared, but are utf-8
 	// this is a common issue so configure the decoder to be lenient
 	decoder.CharsetReader = func(charset string, input io.Reader) (io.Reader, error) {
-		return input, nil
+		enc, err := ianaindex.IANA.Encoding(charset)
+		if err != nil || enc == nil {
+			// fall back to raw bytes
+			return input, nil
+		}
+		return enc.NewDecoder().Reader(input), nil
 	}
 
 	if err := decoder.Decode(&opfData); err != nil {

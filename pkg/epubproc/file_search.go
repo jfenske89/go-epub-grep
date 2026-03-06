@@ -28,7 +28,7 @@ type fileSearchImpl struct {
 	// epubDir is a directory containing epub files to search
 	epubDir string
 
-	// maxThreads fines the maximum number of worker goroutines to use
+	// maxThreads defines the maximum number of worker goroutines to use
 	maxThreads int
 
 	// extractMetadata controls whether to extract metadata for search results

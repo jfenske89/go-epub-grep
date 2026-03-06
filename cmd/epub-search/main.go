@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -134,7 +135,8 @@ func setupSearchFlags(cmd *cobra.Command, flags *searchFlags) {
 	// required flags
 	if err := cmd.MarkFlagRequired("directory"); err != nil {
 		log.Err(err).Msg("failed to mark directory flag as required")
-	} else if err := cmd.MarkFlagRequired("pattern"); err != nil {
+	}
+	if err := cmd.MarkFlagRequired("pattern"); err != nil {
 		log.Err(err).Msg("failed to mark pattern flag as required")
 	}
 }
@@ -172,6 +174,7 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 	// collect results with pre-allocated capacity for improved performance
 	results := make([]searchResult, 0, 16)
 	var totalMatches int
+	var mu sync.Mutex
 
 	if err := fileSearch.Search(ctx, request, func(result *epubproc.SearchResult) error {
 		searchRes := searchResult{
@@ -183,8 +186,11 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 			searchRes.Metadata = &result.Metadata
 		}
 
+		mu.Lock()
 		results = append(results, searchRes)
 		totalMatches += len(result.Matches)
+		mu.Unlock()
+
 		return nil
 	}); err != nil {
 		return fmt.Errorf("search failed: %w", err)
@@ -193,7 +199,7 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 	log.Debug().
 		Int("files_with_matches", len(results)).
 		Int("total_matches", totalMatches).
-		Str("duation", time.Since(startedAt).String()).
+		Str("duration", time.Since(startedAt).String()).
 		Msg("ePUB search completed")
 
 	// process results and write output

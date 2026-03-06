@@ -120,10 +120,13 @@ func TestFileSearchIntegration(t *testing.T) {
 		}
 
 		var results []*SearchResult
+		var mu sync.Mutex
 		ctx := context.Background()
 
 		err := fs.Search(ctx, request, func(result *SearchResult) error {
+			mu.Lock()
 			results = append(results, result)
+			mu.Unlock()
 			return nil
 		})
 		if err != nil {
