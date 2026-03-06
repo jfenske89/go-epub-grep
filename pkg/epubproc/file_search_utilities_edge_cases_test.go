@@ -434,25 +434,23 @@ func TestContextBoundaryConditions(t *testing.T) {
 		}
 	})
 
-	// test adjacent matches with overlapping context
+	// test adjacent matches with overlapping context are merged into a single match
 	t.Run("AdjacentMatchesOverlapContext", func(t *testing.T) {
 		content := "line1\ntarget1 here\nline3\ntarget2 here\nline5"
 		reader := strings.NewReader(content)
 		pattern, _ := regexp.Compile("target")
 
 		matches := scanTextFile(reader, pattern, "adjacent.txt", 1)
-		if len(matches) != 2 {
-			t.Errorf("Expected 2 matches, got %d", len(matches))
+
+		// overlapping context windows should merge into a single match
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 merged match, got %d", len(matches))
 		}
 
-		// each match should have its own context
-		for _, match := range matches {
-			lineCount := len(strings.Split(match.Line, "\n"))
-
-			// match + 1 before + 1 after
-			if lineCount != 3 {
-				t.Errorf("Expected 3 lines in context, got %d in: %s", lineCount, match.Line)
-			}
+		// merged match should contain all 5 lines
+		lineCount := len(strings.Split(matches[0].Line, "\n"))
+		if lineCount != 5 {
+			t.Errorf("Expected 5 lines in merged context, got %d in: %s", lineCount, matches[0].Line)
 		}
 	})
 }

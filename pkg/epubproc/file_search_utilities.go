@@ -90,34 +90,17 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 	scanner := pooledSc.scanner
 
 	// use sliding window approach for memory efficiency
-	lines := make([]string, 0, 512) // pre-allocate for ~512 lines (reduces reallocations)
-	matches := make([]Match, 0, 16) // pre-allocate for expected matches
-	lineNum := 0
+	lines := make([]string, 0, 512)    // pre-allocate for ~512 lines (reduces reallocations)
+	matchedLines := make([]int, 0, 16) // pre-allocate for expected matched lines
 
-	// for files without context, we can process line by line
-	if contextLines == 0 {
-		for scanner.Scan() {
-			line := scanner.Text()
-			if pattern.MatchString(line) {
-				matches = append(matches, Match{
-					Line:     strings.TrimSpace(line),
-					FileName: fileName,
-				})
-			}
-		}
-
-		if err := scanner.Err(); err != nil {
-			log.Error().Err(err).Str("file", fileName).Msg("error scanning text file")
-			return nil
-		}
-		return matches
-	}
-
-	// first pass: identify matching lines and build context
-	for scanner.Scan() {
+	// compile list of lines and identify matching lines
+	for i := 0; scanner.Scan(); i++ {
 		line := scanner.Text()
 		lines = append(lines, line)
-		lineNum++
+
+		if pattern.MatchString(line) {
+			matchedLines = append(matchedLines, i)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -125,20 +108,7 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 		return nil
 	}
 
-	// second pass: build matches with context
-	for i, line := range lines {
-		if pattern.MatchString(line) {
-			start := max(i-contextLines, 0)
-			end := min(i+contextLines+1, len(lines))
-			fullMatch := strings.Join(lines[start:end], "\n")
-			matches = append(matches, Match{
-				Line:     strings.TrimSpace(fullMatch),
-				FileName: fileName,
-			})
-		}
-	}
-
-	return matches
+	return createContextMatches(matchedLines, lines, fileName, contextLines)
 }
 
 // scanHTMLFile extracts text content from HTML and searches for pattern matches.
@@ -208,17 +178,79 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 	// flush remaining text after the last tag
 	flushLine()
 
-	var matches []Match
+	var matchedLines []int
 	for i, line := range textLines {
 		if pattern.MatchString(line) {
-			start := max(i-contextLines, 0)
-			end := min(i+contextLines+1, len(textLines))
-			fullMatch := strings.Join(textLines[start:end], "\n")
+			matchedLines = append(matchedLines, i)
+		}
+	}
+
+	return createContextMatches(matchedLines, textLines, fileName, contextLines)
+}
+
+// createContextMatches compiles matches with context lines, merging overlapping context windows.
+func createContextMatches(matchedLines []int, lines []string, fileName string, contextLines int) []Match {
+	// without context, each match is independent
+	if contextLines == 0 {
+		matches := make([]Match, 0, len(matchedLines))
+		for _, idx := range matchedLines {
 			matches = append(matches, Match{
-				Line:     strings.TrimSpace(fullMatch),
+				Line:     strings.TrimSpace(lines[idx]),
 				FileName: fileName,
 			})
 		}
+		return matches
+	}
+
+	type window struct {
+		start int
+		end   int
+	}
+
+	var windows []window
+	var windowIndex, previousEnd int
+
+	// build context windows
+	for i := range matchedLines {
+		start := max(matchedLines[i]-contextLines, 0)
+		end := min(matchedLines[i]+contextLines+1, len(lines))
+
+		if len(windows) == 0 {
+			// start the first window
+			windows = append(windows, window{
+				start: start,
+				end:   end,
+			})
+
+			previousEnd = end
+			continue
+		}
+
+		if start <= previousEnd {
+			// extend the window
+			windows[windowIndex].end = end
+		} else {
+			// start a new window
+			windowIndex++
+			windows = append(windows, window{
+				start: start,
+				end:   end,
+			})
+		}
+
+		previousEnd = end
+	}
+
+	// compile matches
+	matches := make([]Match, 0, len(windows))
+	for i := range windows {
+		start := windows[i].start
+		end := windows[i].end
+		fullMatch := strings.Join(lines[start:end], "\n")
+		matches = append(matches, Match{
+			Line:     strings.TrimSpace(fullMatch),
+			FileName: fileName,
+		})
 	}
 	return matches
 }

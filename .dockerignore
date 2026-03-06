@@ -1,0 +1,28 @@
+# Version control
+.git
+.gitignore
+
+# Build output
+bin
+
+# Test data
+public-domain
+
+# CI and tooling config
+.github
+.golangci.yml
+Taskfile.yml
+test_cli.sh
+
+# Documentation
+*.md
+LICENSE
+logo.png
+
+# Editor and OS files
+.DS_Store
+.env
+
+# Claude Code
+CLAUDE.md
+.claude
