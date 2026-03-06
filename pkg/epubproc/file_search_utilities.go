@@ -93,6 +93,26 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 	lines := make([]string, 0, 512)    // pre-allocate for ~512 lines (reduces reallocations)
 	matchedLines := make([]int, 0, 16) // pre-allocate for expected matched lines
 
+	// for files without context, we can process line by line
+	if contextLines == 0 {
+		matches := make([]Match, 0, 16) // pre-allocate for expected matches
+		for scanner.Scan() {
+			line := scanner.Text()
+			if pattern.MatchString(line) {
+				matches = append(matches, Match{
+					Line:     strings.TrimSpace(line),
+					FileName: fileName,
+				})
+			}
+		}
+
+		if err := scanner.Err(); err != nil {
+			log.Error().Err(err).Str("file", fileName).Msg("error scanning text file")
+			return nil
+		}
+		return matches
+	}
+
 	// compile list of lines and identify matching lines
 	for i := 0; scanner.Scan(); i++ {
 		line := scanner.Text()

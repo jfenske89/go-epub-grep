@@ -32,6 +32,10 @@ tasks:
     cmds:
       - go test ./...
 
+  bench:
+    cmds:
+      - go test ./pkg/epubproc/ -bench=.
+
   vet:
     cmds:
       - go vet ./...
