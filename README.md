@@ -4,7 +4,7 @@
   <img src="./logo.png" alt="Go ePUB grep" width="100" height="auto">
 </p>
 
-A CLI (and Go library) to search the content of ePub files.
+A tool to search the content of ePub files. Also includes a Go library for advanced integrations.
 
 ## Features
 
