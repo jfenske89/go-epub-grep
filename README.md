@@ -15,6 +15,20 @@ A tool to search the content of ePub files. Also includes a Go library for advan
 - Configurable context lines around matches for better readability
 - Structured JSON output suitable for API integration and web applications
 
+## Installation
+
+### Using `go install`
+
+```bash
+go install github.com/jfenske89/go-epub-grep/cmd/epub-search@latest
+```
+
+This installs the `epub-search` binary to your `$GOPATH/bin` directory. Make sure that directory is in your `$PATH`.
+
+### Using Docker
+
+See the [Docker](#docker) section below.
+
 ## CLI Usage
 
 ### Basic Search
