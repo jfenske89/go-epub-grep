@@ -106,20 +106,20 @@ epub-search search \
 
 ### Command-Line Options
 
-| Flag | Short | Description | Required |
-|------|-------|-------------|----------|
-| `--directory` | `-d` | Directory containing ePUB files | ✓ |
-| `--pattern` | `-p` | Search pattern (text or regex) | ✓ |
-| `--regex` | | Treat pattern as regular expression | |
-| `--ignore-case` | `-i` | Case-insensitive search (text mode only) | |
-| `--context` | `-c` | Number of context lines around matches | |
-| `--threads` | `-t` | Maximum worker threads (default: CPU cores) | |
-| `--extract-metadata` | | Extract and include metadata in results | |
-| `--author` | | Filter by author (requires --extract-metadata) | |
-| `--series` | | Filter by series (requires --extract-metadata) | |
-| `--title` | | Filter by title (requires --extract-metadata) | |
-| `--files-in` | | Filter to specific ePUB files | |
-| `--pretty` | | Pretty-print JSON output | |
+| Flag                 | Short | Description                                    | Required |
+| -------------------- | ----- | ---------------------------------------------- | -------- |
+| `--directory`        | `-d`  | Directory containing ePUB files                | ✓        |
+| `--pattern`          | `-p`  | Search pattern (text or regex)                 | ✓        |
+| `--regex`            |       | Treat pattern as regular expression            |          |
+| `--ignore-case`      | `-i`  | Case-insensitive search (text mode only)       |          |
+| `--context`          | `-c`  | Number of context lines around matches         |          |
+| `--threads`          | `-t`  | Maximum worker threads (default: CPU cores)    |          |
+| `--extract-metadata` |       | Extract and include metadata in results        |          |
+| `--author`           |       | Filter by author (requires --extract-metadata) |          |
+| `--series`           |       | Filter by series (requires --extract-metadata) |          |
+| `--title`            |       | Filter by title (requires --extract-metadata)  |          |
+| `--files-in`         |       | Filter to specific ePUB files                  |          |
+| `--pretty`           |       | Pretty-print JSON output                       |          |
 
 ## Output Format
 

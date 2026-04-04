@@ -310,13 +310,14 @@ func TestScanHTMLFileErrors(t *testing.T) {
 	// test with context cancellation during HTML parsing
 	t.Run("ContextCancellation", func(t *testing.T) {
 		// create HTML that will take some time to process
-		largeHTML := "<html><body>"
-		for i := 0; i < 200; i++ {
-			largeHTML += "<p>Some content here</p>"
+		var largeHTML strings.Builder
+		largeHTML.WriteString("<html><body>")
+		for range 200 {
+			largeHTML.WriteString("<p>Some content here</p>")
 		}
-		largeHTML += "</body></html>"
+		largeHTML.WriteString("</body></html>")
 
-		reader := strings.NewReader(largeHTML)
+		reader := strings.NewReader(largeHTML.String())
 		pattern, _ := regexp.Compile("content")
 
 		// create context that cancels immediately

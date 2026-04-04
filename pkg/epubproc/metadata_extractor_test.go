@@ -688,7 +688,7 @@ func TestConcurrentProcessing(t *testing.T) {
 
 	// create many files to test concurrency
 	numBooks := 20
-	for i := 0; i < numBooks; i++ {
+	for i := range numBooks {
 		metadata := TestEPUBMetadata{
 			Title:   fmt.Sprintf("Concurrent Book %d", i),
 			Authors: []string{fmt.Sprintf("Author %d", i)},

@@ -19,9 +19,9 @@ func generateLargeTextContent(lines int, pattern string) string {
 	for i := range lines {
 		if i%100 == 0 {
 			// insert the pattern every 100 lines
-			builder.WriteString(fmt.Sprintf("Line %d contains %s for testing purposes.\n", i, pattern))
+			fmt.Fprintf(&builder, "Line %d contains %s for testing purposes.\n", i, pattern)
 		} else {
-			builder.WriteString(fmt.Sprintf("Line %d has some regular content without any special words.\n", i))
+			fmt.Fprintf(&builder, "Line %d has some regular content without any special words.\n", i)
 		}
 	}
 
@@ -39,9 +39,9 @@ func generateLargeHTMLContent(elements int, pattern string) string {
 	for i := range elements {
 		if i%50 == 0 {
 			// insert the pattern every 50 elements
-			builder.WriteString(fmt.Sprintf("<p>Element %d contains %s for testing purposes.</p>\n", i, pattern))
+			fmt.Fprintf(&builder, "<p>Element %d contains %s for testing purposes.</p>\n", i, pattern)
 		} else {
-			builder.WriteString(fmt.Sprintf("<div>Element %d has some regular content without any special words.</div>\n", i))
+			fmt.Fprintf(&builder, "<div>Element %d has some regular content without any special words.</div>\n", i)
 		}
 	}
 

@@ -19,7 +19,8 @@ Pull requests are the best way to propose changes to the codebase.
 
 ### Contributions you make will be under the MIT License
 
-In short, when you submit code changes, your submissions will be understood to be under the same [MIT License](http://choosealicense.com/licenses/mit/) that covers the project.
+In short, when you submit code changes, your submissions will be understood to be under the same
+[MIT License](http://choosealicense.com/licenses/mit/) that covers the project.
 
 ## Reporting bugs
 
@@ -43,4 +44,5 @@ By contributing, you agree that your contributions will be licensed under its MI
 
 ## References
 
-This document was adapted from open-source contribution guidelines that can be seen here: https://gist.github.com/briandk/3d2e8b3ec8daf5a27a62
+This document was adapted from open-source contribution guidelines that can be seen here:
+https://gist.github.com/briandk/3d2e8b3ec8daf5a27a62

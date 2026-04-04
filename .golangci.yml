@@ -3,8 +3,9 @@
 version: "2"
 
 linters:
+  enable:
+    - gosec
+
   exclusions:
-    rules:
-      - path: ".*_test\\.go$"
-        linters:
-          - errcheck
+    paths:
+      - "_test\\.go$"

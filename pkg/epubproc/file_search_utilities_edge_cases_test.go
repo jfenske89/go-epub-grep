@@ -156,19 +156,20 @@ func TestScanHTMLFileEdgeCases(t *testing.T) {
 	// test with deeply nested HTML
 	t.Run("DeeplyNestedHTML", func(t *testing.T) {
 		// create deeply nested structure
-		html := "<html><body>"
-		for i := 0; i < 50; i++ {
-			html += "<div>"
+		var html strings.Builder
+		html.WriteString("<html><body>")
+		for range 50 {
+			html.WriteString("<div>")
 		}
 
-		html += "deeply nested target"
-		for i := 0; i < 50; i++ {
-			html += "</div>"
+		html.WriteString("deeply nested target")
+		for range 50 {
+			html.WriteString("</div>")
 		}
 
-		html += "</body></html>"
+		html.WriteString("</body></html>")
 
-		reader := strings.NewReader(html)
+		reader := strings.NewReader(html.String())
 		pattern, _ := regexp.Compile("target")
 
 		matches := scanHTMLFile(context.Background(), reader, pattern, "nested.html", 0)

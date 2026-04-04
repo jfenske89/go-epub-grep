@@ -1,3 +1,4 @@
-bin
-.DS_Store
+bin/
 public-domain/
+planning/
+.DS_Store
