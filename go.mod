@@ -1,8 +1,9 @@
 module github.com/jfenske89/go-epub-grep
 
-go 1.26.0
+go 1.26.1
 
 require (
+	github.com/kapmahc/epub v0.1.1
 	github.com/rs/zerolog v1.35.0
 	github.com/sourcegraph/conc v0.3.0
 	github.com/spf13/cobra v1.10.2

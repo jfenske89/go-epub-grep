@@ -129,29 +129,36 @@ All commands output structured JSON. Example:
 {
   "results": [
     {
-      "path": "example-library/Romeo and Juliet - Shakespeare, William.epub",
+      "path": "The Adventures of Sherlock Holmes - Arthur Conan Doyle.epub",
       "metadata": {
-        "title": "Romeo and Juliet",
-        "authors": ["William Shakespeare"],
-        "genres": ["Vendetta -- Drama", "Youth -- Drama", "Tragedies (Drama)"],
+        "title": "The Adventures of Sherlock Holmes",
+        "authors": ["Arthur Conan Doyle"],
+        "genres": [
+          "Holmes, Sherlock (Fictitious character) -- Fiction",
+          "Private investigators -- England -- Fiction",
+          "Detective and mystery stories, English"
+        ],
         "series": "",
         "seriesPosition": 0,
-        "yearReleased": 1998,
+        "yearReleased": 1999,
         "identifiers": {
-          "uri": "http://www.gutenberg.org/1513"
+          "uri": "http://www.gutenberg.org/1661"
         }
       },
       "matches": [
         {
-          "line": "A pair of star-cross'd lovers take their life;",
-          "fileName": "OEBPS/717674059043090192_1513-h-2.htm.xhtml"
+          "line": "when you have excluded the impossible, whatever remains, however improbable, must be the truth",
+          "fileName": "OEBPS/1700050369960564526_1661-h-11.htm.xhtml",
+          "metadata": {
+            "chapter": "XI. THE ADVENTURE OF THE BERYL CORONET"
+          }
         }
       ]
     }
   ],
   "summary": {
     "totalFiles": 1,
-    "totalMatches": 132
+    "totalMatches": 1
   }
 }
 ```

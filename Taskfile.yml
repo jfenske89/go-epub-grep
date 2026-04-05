@@ -24,7 +24,7 @@ tasks:
   fmt:
     cmds:
       - go run mvdan.cc/gofumpt@latest -w ./
-      - npx prettier -w *.md
+      - npx prettier -w *.md --log-level=warn
 
   test:
     cmds:
@@ -50,7 +50,7 @@ tasks:
     cmds:
       - go run golang.org/x/tools/go/analysis/passes/modernize/cmd/modernize@latest -fix ./...
       - task: test
-  
+
   build:
     cmds:
       - mkdir -p ./bin

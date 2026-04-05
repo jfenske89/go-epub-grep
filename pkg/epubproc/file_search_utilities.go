@@ -3,6 +3,7 @@ package epubproc
 import (
 	"archive/zip"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/kapmahc/epub"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/net/html"
 )
@@ -35,10 +37,31 @@ func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, co
 		}
 	}()
 
+	fileToChapter := make(map[string]string, 10)
+
 	var matches []Match
 
+	// 1st pass to process toc.ncx for priority chapter info
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		if strings.Contains(strings.ToLower(f.Name), "toc.ncx") {
+			fileToChapter = processTableOfContents(f)
+			break
+		}
+	}
+
+	// process all other files
+	for _, f := range r.File {
+		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		// secondary chapter processing
+		if strings.Contains(strings.ToLower(f.Name), "content.opf") {
+			processContentOpf(f, fileToChapter)
 			continue
 		}
 
@@ -79,7 +102,97 @@ func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, co
 		matches = append(matches, fileMatches...)
 	}
 
+	for i := range matches {
+		match := matches[i]
+
+		// get the base file name
+		paths := strings.Split(match.FileName, "/")
+		baseName := paths[len(paths)-1]
+
+		if fn, ok := fileToChapter[baseName]; ok {
+			match.Metadata = &MatchMetadata{
+				Chapter: &fn,
+			}
+			matches[i] = match
+		}
+	}
+
 	return matches, nil
+}
+
+func processXmlFile(f *zip.File, handler func(xmlBytes []byte)) {
+	rc, err := f.Open()
+	if err != nil {
+		log.Warn().Err(err).
+			Str("file", f.Name).
+			Msg("failed to open file in epub")
+		return
+	}
+	defer func() {
+		if err := rc.Close(); err != nil {
+			log.Warn().Err(err).
+				Str("file", f.Name).
+				Msg("failed to close file in epub")
+		}
+	}()
+
+	xmlBytes, err := io.ReadAll(rc)
+	if err != nil {
+		log.Warn().Err(err).
+			Str("file", f.Name).
+			Msg("failed to read file in epub")
+		return
+	}
+
+	handler(xmlBytes)
+}
+
+func processTableOfContents(f *zip.File) map[string]string {
+	fileToChapter := make(map[string]string, 10)
+	processXmlFile(f, func(xmlBytes []byte) {
+		var ncx epub.Ncx
+		if err := xml.Unmarshal(xmlBytes, &ncx); err != nil {
+			log.Warn().Err(err).
+				Str("file", f.Name).
+				Msg("failed to unmarshal file in epub")
+			return
+		}
+
+		for _, np := range ncx.Points {
+			paths := strings.Split(np.Content.Src, "/")
+			baseName := paths[len(paths)-1]
+			fileToChapter[baseName] = np.Text
+
+			// remove anchor tags as an alternative lookup
+			if strings.Contains(baseName, "#") {
+				hashes := strings.Split(baseName, "#")
+				altKey := hashes[0]
+				fileToChapter[altKey] = np.Text
+			}
+		}
+	})
+
+	return fileToChapter
+}
+
+func processContentOpf(f *zip.File, fileToChapter map[string]string) {
+	processXmlFile(f, func(xmlBytes []byte) {
+		var opf epub.Opf
+		if err := xml.Unmarshal(xmlBytes, &opf); err != nil {
+			log.Warn().Err(err).
+				Str("file", f.Name).
+				Msg("failed to unmarshal file in epub")
+			return
+		}
+
+		for _, manifest := range opf.Manifest {
+			paths := strings.Split(manifest.Href, "/")
+			baseName := paths[len(paths)-1]
+			if _, ok := fileToChapter[baseName]; !ok {
+				fileToChapter[baseName] = manifest.ID
+			}
+		}
+	})
 }
 
 // scanTextFile scans a plain text file for pattern matches.
@@ -99,10 +212,11 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 		for scanner.Scan() {
 			line := scanner.Text()
 			if pattern.MatchString(line) {
-				matches = append(matches, Match{
+				match := Match{
 					Line:     strings.TrimSpace(line),
 					FileName: fileName,
-				})
+				}
+				matches = append(matches, match)
 			}
 		}
 
@@ -214,10 +328,11 @@ func createContextMatches(matchedLines []int, lines []string, fileName string, c
 	if contextLines == 0 {
 		matches := make([]Match, 0, len(matchedLines))
 		for _, idx := range matchedLines {
-			matches = append(matches, Match{
+			match := Match{
 				Line:     strings.TrimSpace(lines[idx]),
 				FileName: fileName,
-			})
+			}
+			matches = append(matches, match)
 		}
 		return matches
 	}
@@ -267,10 +382,11 @@ func createContextMatches(matchedLines []int, lines []string, fileName string, c
 		start := windows[i].start
 		end := windows[i].end
 		fullMatch := strings.Join(lines[start:end], "\n")
-		matches = append(matches, Match{
+		match := Match{
 			Line:     strings.TrimSpace(fullMatch),
 			FileName: fileName,
-		})
+		}
+		matches = append(matches, match)
 	}
 	return matches
 }

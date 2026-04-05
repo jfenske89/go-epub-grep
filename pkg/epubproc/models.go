@@ -147,6 +147,12 @@ type rootfile struct {
 	MediaType string `xml:"media-type,attr"`
 }
 
+// MatchMetadata represents extracted metadata from a single search result.
+type MatchMetadata struct {
+	// The name of the chapter (if found).
+	Chapter *string `json:"chapter,omitempty"`
+}
+
 // Match represents a single search result found within an epub file.
 type Match struct {
 	// The text line containing the match, including any context lines.
@@ -154,6 +160,9 @@ type Match struct {
 
 	// The name of the file inside the epub where the match was found.
 	FileName string `json:"fileName"`
+
+	// Optional metadata related to the match (if enabled and found).
+	Metadata *MatchMetadata `json:"metadata,omitempty"`
 }
 
 // SearchResult represents the complete search result for a single epub file.

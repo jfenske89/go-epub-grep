@@ -265,6 +265,453 @@ func TestGrepInEpubErrors(t *testing.T) {
 	})
 }
 
+// TestGrepInEpubChapterMetadata tests chapter name enrichment via toc.ncx parsing.
+func TestGrepInEpubChapterMetadata(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "grep_chapter_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	const validTocNcx = `<?xml version="1.0" encoding="UTF-8"?>
+<ncx>
+  <navMap>
+    <navPoint id="nav1" playOrder="1">
+      <navLabel><text>Chapter One</text></navLabel>
+      <content src="chapter1.html"/>
+    </navPoint>
+    <navPoint id="nav2" playOrder="2">
+      <navLabel><text>Chapter Two</text></navLabel>
+      <content src="chapter2.html"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+
+	// ChapterMetadataFromToc verifies that matches in files listed in toc.ncx have
+	// Metadata.Chapter populated, and that files absent from toc.ncx have nil Metadata.
+	t.Run("ChapterMetadataFromToc", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "with_toc.epub")
+		files := map[string]string{
+			"toc.ncx":       validTocNcx,
+			"chapter1.html": "<p>Hello target world</p>",
+			"chapter2.html": "<p>Another target here</p>",
+			"unknown.html":  "<p>target without chapter</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 3 {
+			t.Fatalf("Expected 3 matches, got %d", len(matches))
+		}
+
+		byFile := make(map[string]Match)
+		for _, m := range matches {
+			byFile[m.FileName] = m
+		}
+
+		chapterCases := []struct {
+			file    string
+			chapter string
+		}{
+			{"chapter1.html", "Chapter One"},
+			{"chapter2.html", "Chapter Two"},
+		}
+		for _, c := range chapterCases {
+			m, ok := byFile[c.file]
+			if !ok {
+				t.Errorf("Expected match in %s", c.file)
+				continue
+			}
+			if m.Metadata == nil || m.Metadata.Chapter == nil {
+				t.Errorf("%s: expected chapter metadata, got nil", c.file)
+			} else if *m.Metadata.Chapter != c.chapter {
+				t.Errorf("%s: expected chapter %q, got %q", c.file, c.chapter, *m.Metadata.Chapter)
+			}
+		}
+
+		m, ok := byFile["unknown.html"]
+		if !ok {
+			t.Fatal("Expected match in unknown.html")
+		}
+		if m.Metadata != nil {
+			t.Errorf("unknown.html: expected nil metadata, got %+v", m.Metadata)
+		}
+	})
+
+	// NoChapterMetadataWithoutToc verifies that matches have nil Metadata when no toc.ncx
+	// is present in the epub.
+	t.Run("NoChapterMetadataWithoutToc", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "no_toc.epub")
+		files := map[string]string{
+			"chapter1.html": "<p>target content here</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 match, got %d", len(matches))
+		}
+		if matches[0].Metadata != nil {
+			t.Errorf("Expected nil metadata, got %+v", matches[0].Metadata)
+		}
+	})
+
+	// TocNcxNotSearched verifies that the toc.ncx file itself is not included in match
+	// results, even when it contains the search term.
+	t.Run("TocNcxNotSearched", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "toc_not_searched.epub")
+		tocWithTerm := `<?xml version="1.0" encoding="UTF-8"?>
+<ncx>
+  <navMap>
+    <navPoint id="nav1" playOrder="1">
+      <navLabel><text>target chapter</text></navLabel>
+      <content src="chapter1.html"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+		files := map[string]string{
+			"toc.ncx":       tocWithTerm,
+			"chapter1.html": "<p>content without match</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 0 {
+			t.Errorf("Expected 0 matches (toc.ncx should not be searched), got %d", len(matches))
+			for _, m := range matches {
+				t.Logf("  unexpected match in: %s", m.FileName)
+			}
+		}
+	})
+
+	// AnchorInTocSrcResolved verifies that a toc.ncx nav point with an anchor fragment in
+	// its src (e.g. "chapter1.html#section1") still resolves chapter metadata for a file
+	// named "chapter1.html" (without the anchor).
+	t.Run("AnchorInTocSrcResolved", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "anchor_toc.epub")
+		anchorToc := `<?xml version="1.0" encoding="UTF-8"?>
+<ncx>
+  <navMap>
+    <navPoint id="nav1" playOrder="1">
+      <navLabel><text>Chapter One</text></navLabel>
+      <content src="chapter1.html#section1"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+		files := map[string]string{
+			"toc.ncx":       anchorToc,
+			"chapter1.html": "<p>Hello target world</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 match, got %d", len(matches))
+		}
+		if matches[0].Metadata == nil || matches[0].Metadata.Chapter == nil {
+			t.Fatal("Expected chapter metadata via anchor-stripped fallback key, got nil")
+		}
+		if *matches[0].Metadata.Chapter != "Chapter One" {
+			t.Errorf("Expected chapter %q, got %q", "Chapter One", *matches[0].Metadata.Chapter)
+		}
+	})
+
+	// MalformedTocNcxHandled verifies that invalid XML in toc.ncx does not cause an error,
+	// and that matches from content files are still returned (with nil Metadata).
+	t.Run("MalformedTocNcxHandled", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "malformed_toc.epub")
+		files := map[string]string{
+			"toc.ncx":       "this is not valid XML <<<",
+			"chapter1.html": "<p>target content here</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub should not return an error on malformed toc.ncx, got: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 match from content file, got %d", len(matches))
+		}
+		if matches[0].Metadata != nil {
+			t.Errorf("Expected nil metadata when toc.ncx is malformed, got %+v", matches[0].Metadata)
+		}
+	})
+
+	// TocNcxWithEpubNamespace verifies that a toc.ncx using the standard epub NCX namespace
+	// (xmlns="http://www.daisy.org/z3986/2005/ncx/") is parsed correctly. Go's xml.Unmarshal
+	// matches namespaced elements against bare local-name struct tags, so real epub files work.
+	t.Run("TocNcxWithEpubNamespace", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "namespace_toc.epub")
+		namespacedToc := `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <navMap>
+    <navPoint id="nav1" playOrder="1">
+      <navLabel><text>Chapter One</text></navLabel>
+      <content src="chapter1.html"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+		files := map[string]string{
+			"toc.ncx":       namespacedToc,
+			"chapter1.html": "<p>target content</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 match, got %d", len(matches))
+		}
+		if matches[0].Metadata == nil || matches[0].Metadata.Chapter == nil {
+			t.Fatal("Expected chapter metadata from namespaced toc.ncx, got nil")
+		}
+		if *matches[0].Metadata.Chapter != "Chapter One" {
+			t.Errorf("Expected chapter %q, got %q", "Chapter One", *matches[0].Metadata.Chapter)
+		}
+	})
+}
+
+// TestGrepInEpubContentOpfFallback tests the secondary chapter fallback via content.opf.
+func TestGrepInEpubContentOpfFallback(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "grep_opf_test_*")
+	if err != nil {
+		t.Fatalf("Failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// ContentOpfProvidesChapterFallback verifies that when no toc.ncx is present,
+	// manifest item IDs from content.opf are used as chapter names.
+	t.Run("ContentOpfProvidesChapterFallback", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "opf_fallback.epub")
+		contentOpf := `<?xml version="1.0" encoding="UTF-8"?>
+<package>
+  <manifest>
+    <item id="chapter-one" href="chapter1.html" media-type="application/xhtml+xml"/>
+    <item id="chapter-two" href="chapter2.html" media-type="application/xhtml+xml"/>
+  </manifest>
+</package>`
+		files := map[string]string{
+			"content.opf":   contentOpf,
+			"chapter1.html": "<p>Hello target world</p>",
+			"chapter2.html": "<p>Another target here</p>",
+			"unknown.html":  "<p>target without manifest entry</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 3 {
+			t.Fatalf("Expected 3 matches, got %d", len(matches))
+		}
+
+		byFile := make(map[string]Match)
+		for _, m := range matches {
+			byFile[m.FileName] = m
+		}
+
+		opfCases := []struct {
+			file    string
+			chapter string
+		}{
+			{"chapter1.html", "chapter-one"},
+			{"chapter2.html", "chapter-two"},
+		}
+		for _, c := range opfCases {
+			m, ok := byFile[c.file]
+			if !ok {
+				t.Errorf("Expected match in %s", c.file)
+				continue
+			}
+			if m.Metadata == nil || m.Metadata.Chapter == nil {
+				t.Errorf("%s: expected chapter metadata from content.opf, got nil", c.file)
+			} else if *m.Metadata.Chapter != c.chapter {
+				t.Errorf("%s: expected chapter %q, got %q", c.file, c.chapter, *m.Metadata.Chapter)
+			}
+		}
+
+		m, ok := byFile["unknown.html"]
+		if !ok {
+			t.Fatal("Expected match in unknown.html")
+		}
+		if m.Metadata != nil {
+			t.Errorf("unknown.html: expected nil metadata (not in manifest), got %+v", m.Metadata)
+		}
+	})
+
+	// TocNcxTakesPriorityOverContentOpf verifies that when both toc.ncx and content.opf
+	// have entries for the same file, the toc.ncx chapter name is used.
+	t.Run("TocNcxTakesPriorityOverContentOpf", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "opf_priority.epub")
+		tocNcx := `<?xml version="1.0" encoding="UTF-8"?>
+<ncx>
+  <navMap>
+    <navPoint id="nav1" playOrder="1">
+      <navLabel><text>Chapter One From Toc</text></navLabel>
+      <content src="chapter1.html"/>
+    </navPoint>
+  </navMap>
+</ncx>`
+		contentOpf := `<?xml version="1.0" encoding="UTF-8"?>
+<package>
+  <manifest>
+    <item id="chapter-one-from-opf" href="chapter1.html" media-type="application/xhtml+xml"/>
+  </manifest>
+</package>`
+		files := map[string]string{
+			"toc.ncx":       tocNcx,
+			"content.opf":   contentOpf,
+			"chapter1.html": "<p>target content</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 match, got %d", len(matches))
+		}
+		if matches[0].Metadata == nil || matches[0].Metadata.Chapter == nil {
+			t.Fatal("Expected chapter metadata, got nil")
+		}
+		if *matches[0].Metadata.Chapter != "Chapter One From Toc" {
+			t.Errorf("Expected toc.ncx chapter name %q, got %q", "Chapter One From Toc", *matches[0].Metadata.Chapter)
+		}
+	})
+
+	// ContentOpfNotSearched verifies that the content.opf file itself is not included in
+	// match results, even when it contains the search term.
+	t.Run("ContentOpfNotSearched", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "opf_not_searched.epub")
+		contentOpf := `<?xml version="1.0" encoding="UTF-8"?>
+<package>
+  <manifest>
+    <item id="target-chapter" href="chapter1.html" media-type="application/xhtml+xml"/>
+  </manifest>
+</package>`
+		files := map[string]string{
+			"content.opf":   contentOpf,
+			"chapter1.html": "<p>content without match</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 0 {
+			t.Errorf("Expected 0 matches (content.opf should not be searched), got %d", len(matches))
+			for _, m := range matches {
+				t.Logf("  unexpected match in: %s", m.FileName)
+			}
+		}
+	})
+
+	// ContentOpfDirectoryHrefResolved verifies that manifest hrefs with a directory
+	// component (e.g. "Text/chapter1.html") are resolved to their basename for lookup,
+	// matching the same basename extraction applied to match file names.
+	t.Run("ContentOpfDirectoryHrefResolved", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "opf_dir_href.epub")
+		contentOpf := `<?xml version="1.0" encoding="UTF-8"?>
+<package>
+  <manifest>
+    <item id="chapter-one" href="Text/chapter1.html" media-type="application/xhtml+xml"/>
+  </manifest>
+</package>`
+		files := map[string]string{
+			"content.opf":        contentOpf,
+			"Text/chapter1.html": "<p>target content</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub failed: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 match, got %d", len(matches))
+		}
+		if matches[0].Metadata == nil || matches[0].Metadata.Chapter == nil {
+			t.Fatal("Expected chapter metadata from directory-prefixed manifest href, got nil")
+		}
+		if *matches[0].Metadata.Chapter != "chapter-one" {
+			t.Errorf("Expected chapter %q, got %q", "chapter-one", *matches[0].Metadata.Chapter)
+		}
+	})
+
+	// MalformedContentOpfHandled verifies that invalid XML in content.opf does not cause
+	// an error, and that matches from content files are still returned (with nil Metadata).
+	t.Run("MalformedContentOpfHandled", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "malformed_opf.epub")
+		files := map[string]string{
+			"content.opf":   "this is not valid XML <<<",
+			"chapter1.html": "<p>target content here</p>",
+		}
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		pattern, _ := regexp.Compile("target")
+		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
+		if err != nil {
+			t.Fatalf("grepInEpub should not return an error on malformed content.opf, got: %v", err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("Expected 1 match from content file, got %d", len(matches))
+		}
+		if matches[0].Metadata != nil {
+			t.Errorf("Expected nil metadata when content.opf is malformed, got %+v", matches[0].Metadata)
+		}
+	})
+}
+
 // TestGrepInEpubEdgeCases tests edge cases and boundary conditions
 func TestGrepInEpubEdgeCases(t *testing.T) {
 	tempDir, err := os.MkdirTemp("", "grep_edge_test_*")
