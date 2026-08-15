@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -26,6 +25,9 @@ type MetadataHandler func(epubPath string, metadata *Metadata) error
 // MetadataExtractor defines the interface for extracting metadata from epub files.
 type MetadataExtractor interface {
 	// ProcessDirectory recursively processes epub files in a directory and passes metadata to a handler function.
+	//
+	// This is public library API for consumers embedding epubproc; the epub-search CLI in this
+	// repository does not call it and uses FileSearch.Search directly instead.
 	ProcessDirectory(ctx context.Context, epubDir string, handler MetadataHandler) error
 
 	// ProcessFile extracts complete metadata from a single epub file.
@@ -55,8 +57,7 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 	paths := make(chan string)
 
 	// track file counts for better error context
-	var totalFiles, processedFiles, errorFiles int64
-	var fileCountMutex sync.RWMutex
+	var totalFiles, processedFiles, errorFiles atomic.Int64
 
 	// producer goroutine to find all .epub files
 	p.Go(func(ctx context.Context) error {
@@ -67,9 +68,7 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 			}
 
 			if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".epub") {
-				fileCountMutex.Lock()
-				totalFiles++
-				fileCountMutex.Unlock()
+				totalFiles.Add(1)
 
 				select {
 				case paths <- path:
@@ -95,18 +94,13 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 				metadata, err := m.ProcessFile(ctx, path)
 				if err != nil {
 					// a single corrupt file shouldn't stop the whole process.
-					fileCountMutex.Lock()
-					errorFiles++
-					currentTotalFiles := totalFiles
-					currentProcessedFiles := processedFiles
-					currentErrorFiles := errorFiles
-					fileCountMutex.Unlock()
+					errorFiles.Add(1)
 
 					log.Err(err).
 						Str("path", path).
-						Int64("processed", currentProcessedFiles).
-						Int64("errors", currentErrorFiles).
-						Int64("total", currentTotalFiles).
+						Int64("processed", processedFiles.Load()).
+						Int64("errors", errorFiles.Load()).
+						Int64("total", totalFiles.Load()).
 						Msg("error processing file")
 					continue
 				}
@@ -116,9 +110,7 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 					return err
 				}
 
-				fileCountMutex.Lock()
-				processedFiles++
-				fileCountMutex.Unlock()
+				processedFiles.Add(1)
 			}
 
 			return nil
@@ -128,11 +120,9 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 	err := p.Wait()
 
 	// log final processing summary
-	fileCountMutex.RLock()
-	finalTotalFiles := totalFiles
-	finalProcessedFiles := processedFiles
-	finalErrorFiles := errorFiles
-	fileCountMutex.RUnlock()
+	finalTotalFiles := totalFiles.Load()
+	finalProcessedFiles := processedFiles.Load()
+	finalErrorFiles := errorFiles.Load()
 
 	if finalErrorFiles > 0 {
 		log.Info().
@@ -153,14 +143,8 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 
 // ProcessFile extracts complete metadata from a single epub file.
 func (m *metadataExtractorImpl) ProcessFile(ctx context.Context, epubPath string) (*Metadata, error) {
-	// get file info for better error context
-	fileInfo, fileErr := os.Stat(epubPath)
-
 	r, err := zip.OpenReader(epubPath)
 	if err != nil {
-		if fileErr == nil {
-			return nil, fmt.Errorf("failed to open epub '%s' (size: %d bytes): %w", epubPath, fileInfo.Size(), err)
-		}
 		return nil, fmt.Errorf("failed to open epub '%s': %w", epubPath, err)
 	}
 	defer func() {

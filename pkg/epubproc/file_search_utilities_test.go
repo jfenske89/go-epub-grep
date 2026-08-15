@@ -267,7 +267,102 @@ func TestMatchesMetadataFilters(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			result := matchesMetadataFilters(metadata, test.filters)
+			matchers, err := newFilterMatchers(test.filters)
+			if err != nil {
+				t.Fatalf("newFilterMatchers failed: %v", err)
+			}
+
+			result := matchesMetadataFilters(metadata, test.filters, matchers)
+			if result != test.expected {
+				t.Errorf("Expected %t, got %t", test.expected, result)
+			}
+		})
+	}
+}
+
+// TestMatchesMetadataFiltersWordMode verifies word-boundary metadata filtering (FilterMatchWord).
+func TestMatchesMetadataFiltersWordMode(t *testing.T) {
+	metadata := Metadata{
+		Title:   "The Fellowship of the Ring",
+		Authors: []string{"J.R.R. Tolkien", "José Saramago"},
+		Series:  "The Lord of the Rings,",
+	}
+
+	tests := []struct {
+		name     string
+		filters  *SearchRequestFilters
+		expected bool
+	}{
+		{
+			name:     "Whole-word match at end of field",
+			filters:  &SearchRequestFilters{AuthorEquals: "Tolkien", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "Case-insensitive whole-word match",
+			filters:  &SearchRequestFilters{AuthorEquals: "TOLKIEN", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "Partial-word substring does not match",
+			filters:  &SearchRequestFilters{AuthorEquals: "tolk", MatchMode: FilterMatchWord},
+			expected: false,
+		},
+		{
+			name:     "Full exact string still matches in word mode",
+			filters:  &SearchRequestFilters{AuthorEquals: "J.R.R. Tolkien", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "Multi-word phrase bounded by word boundaries on both ends",
+			filters:  &SearchRequestFilters{AuthorEquals: "R. Tolkien", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "Contiguous multi-word phrase matches title",
+			filters:  &SearchRequestFilters{TitleEquals: "Fellowship of the Ring", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "Non-contiguous tokens do not match as a phrase",
+			filters:  &SearchRequestFilters{TitleEquals: "Fellowship Ring", MatchMode: FilterMatchWord},
+			expected: false,
+		},
+		{
+			name:     "Punctuation-adjacent boundary at end of series string",
+			filters:  &SearchRequestFilters{SeriesEquals: "Rings", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "Unicode letter boundary",
+			filters:  &SearchRequestFilters{AuthorEquals: "Saramago", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "Regex metacharacters in filter value are treated literally",
+			filters:  &SearchRequestFilters{TitleEquals: "The Fellowship of the Ring.", MatchMode: FilterMatchWord},
+			expected: false,
+		},
+		{
+			name:     "Multi-author slice: match on any single author",
+			filters:  &SearchRequestFilters{AuthorEquals: "Saramago", MatchMode: FilterMatchWord},
+			expected: true,
+		},
+		{
+			name:     "No match on unrelated word",
+			filters:  &SearchRequestFilters{AuthorEquals: "Rowling", MatchMode: FilterMatchWord},
+			expected: false,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			matchers, err := newFilterMatchers(test.filters)
+			if err != nil {
+				t.Fatalf("newFilterMatchers failed: %v", err)
+			}
+
+			result := matchesMetadataFilters(metadata, test.filters, matchers)
 			if result != test.expected {
 				t.Errorf("Expected %t, got %t", test.expected, result)
 			}

@@ -52,15 +52,11 @@ func NewFileSearch(epubDir string, maxThreads int, extractMetadata bool) FileSea
 // Search performs a full-text search across all epub files in the configured directory.
 func (s *fileSearchImpl) Search(ctx context.Context, request *SearchRequest, handler ResultHandler) error {
 	var pattern string
-	if request.Query.IsRegex {
-		if request.Query.Regex == nil {
-			return fmt.Errorf("regex configuration is required when IsRegex is true")
-		}
-
+	if request.Query.Regex != nil {
 		pattern = request.Query.Regex.Pattern
 	} else {
 		if request.Query.Text == nil {
-			return fmt.Errorf("text configuration is required when IsRegex is false")
+			return fmt.Errorf("text configuration is required when Regex is empty")
 		}
 
 		pattern = regexp.QuoteMeta(request.Query.Text.Value)
@@ -69,9 +65,14 @@ func (s *fileSearchImpl) Search(ctx context.Context, request *SearchRequest, han
 		}
 	}
 
-	patternRegex, err := patternCache.get(pattern)
+	patternRegex, err := regexp.Compile(pattern)
 	if err != nil {
 		return fmt.Errorf("invalid pattern '%s': %w", pattern, err)
+	}
+
+	matchers, err := newFilterMatchers(request.Filters)
+	if err != nil {
+		return err
 	}
 
 	p := pool.New().WithContext(ctx).WithCancelOnError()
@@ -147,7 +148,7 @@ func (s *fileSearchImpl) Search(ctx context.Context, request *SearchRequest, han
 
 					// apply metadata-based filters if provided and metadata is extracted
 					if request.Filters != nil && s.extractMetadata {
-						if !matchesMetadataFilters(metadata, request.Filters) {
+						if !matchesMetadataFilters(metadata, request.Filters, matchers) {
 							continue
 						}
 					}

@@ -110,7 +110,6 @@ func TestFileSearchIntegration(t *testing.T) {
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: false,
 				Text: &SearchRequestText{
 					Value:      "Holmes",
 					IgnoreCase: false,
@@ -154,7 +153,6 @@ func TestFileSearchIntegration(t *testing.T) {
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: true,
 				Regex: &SearchRequestRegex{
 					Pattern: "Holmes|Watson",
 				},
@@ -188,7 +186,6 @@ func TestFileSearchIntegration(t *testing.T) {
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: false,
 				Text: &SearchRequestText{
 					Value:      "holmes",
 					IgnoreCase: true,
@@ -223,7 +220,6 @@ func TestFileSearchIntegration(t *testing.T) {
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: true,
 				Regex: &SearchRequestRegex{
 					Pattern: "Holmes|Watson",
 				},
@@ -258,13 +254,81 @@ func TestFileSearchIntegration(t *testing.T) {
 		}
 	})
 
+	// test word-boundary metadata filter matching (FilterMatchWord)
+	t.Run("FilterMatchWord", func(t *testing.T) {
+		fs := NewFileSearch(tempDir, 2, true)
+
+		request := &SearchRequest{
+			Query: SearchRequestQuery{
+				Text: &SearchRequestText{Value: "Holmes"},
+			},
+			Context: 0,
+			Filters: &SearchRequestFilters{
+				// createTestEPUB hardcodes dc:creator to "Test Author"
+				AuthorEquals: "Author",
+				MatchMode:    FilterMatchWord,
+			},
+		}
+
+		var results []*SearchResult
+		var mu sync.Mutex
+		ctx := context.Background()
+
+		if err := fs.Search(ctx, request, func(result *SearchResult) error {
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+			return nil
+		}); err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+
+		// whole word "Author" should match "Test Author"
+		if len(results) != 1 {
+			t.Errorf("Expected 1 result, got %d", len(results))
+		}
+	})
+
+	// test that a partial-word filter value does not match under FilterMatchWord
+	t.Run("FilterMatchWordPartialNoMatch", func(t *testing.T) {
+		fs := NewFileSearch(tempDir, 2, true)
+
+		request := &SearchRequest{
+			Query: SearchRequestQuery{
+				Text: &SearchRequestText{Value: "Holmes"},
+			},
+			Context: 0,
+			Filters: &SearchRequestFilters{
+				AuthorEquals: "Auth",
+				MatchMode:    FilterMatchWord,
+			},
+		}
+
+		var results []*SearchResult
+		var mu sync.Mutex
+		ctx := context.Background()
+
+		if err := fs.Search(ctx, request, func(result *SearchResult) error {
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+			return nil
+		}); err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+
+		// "Auth" is not a whole word within "Test Author"
+		if len(results) != 0 {
+			t.Errorf("Expected 0 results, got %d", len(results))
+		}
+	})
+
 	// test context with cancellation
 	t.Run("ContextCancellation", func(t *testing.T) {
 		fs := NewFileSearch(tempDir, 1, false)
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: true,
 				Regex: &SearchRequestRegex{
 					Pattern: "Holmes|Watson",
 				},
@@ -303,32 +367,10 @@ func TestFileSearchErrorCases(t *testing.T) {
 	fs := NewFileSearch(tempDir, 2, false)
 	ctx := context.Background()
 
-	// test missing regex configuration
-	t.Run("MissingRegexConfig", func(t *testing.T) {
-		request := &SearchRequest{
-			Query: SearchRequestQuery{
-				IsRegex: true,
-
-				// missing regex config
-				Regex: nil,
-			},
-		}
-
-		err := fs.Search(ctx, request, func(result *SearchResult) error {
-			return nil
-		})
-
-		if err == nil || !strings.Contains(err.Error(), "regex configuration is required") {
-			t.Errorf("Expected regex config error, got: %v", err)
-		}
-	})
-
 	// test missing text configuration
 	t.Run("MissingTextConfig", func(t *testing.T) {
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: false,
-
 				// missing text config
 				Text: nil,
 			},
@@ -347,7 +389,6 @@ func TestFileSearchErrorCases(t *testing.T) {
 	t.Run("InvalidRegexPattern", func(t *testing.T) {
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: true,
 				Regex: &SearchRequestRegex{
 					// invalid regex
 					Pattern: "[invalid",
@@ -371,7 +412,6 @@ func TestFileSearchErrorCases(t *testing.T) {
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: false,
 				Text: &SearchRequestText{
 					Value: "Find",
 				},
@@ -395,7 +435,6 @@ func TestFileSearchErrorCases(t *testing.T) {
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				IsRegex: false,
 				Text: &SearchRequestText{
 					Value: "test",
 				},

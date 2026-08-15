@@ -34,8 +34,9 @@ func (ps *pooledScanner) reset(r io.Reader) {
 	ps.scanner.Buffer(ps.buffer[:0], 256*1024)
 }
 
-// scannerPool reuses pooledScanner instances to reduce GC pressure during text file scanning. This pool significantly
-// improves performance when processing large numbers of text files by avoiding repeated scanner and buffer allocations.
+// scannerPool reuses pooledScanner instances to reduce GC pressure during text file scanning. Each reset still
+// allocates a fresh bufio.Scanner, but reuses the pooledScanner's backing buffer, which avoids repeated buffer
+// growth allocations when processing large numbers of text files.
 var scannerPool = sync.Pool{
 	New: func() any {
 		return newPooledScanner(strings.NewReader(""))

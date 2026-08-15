@@ -68,12 +68,10 @@ library. Designed for integration into self-hosted ePub library applications.
 cmd/epub-search/       CLI entrypoint (main.go)
 pkg/epubproc/          Core library package
   file_search.go       File searching logic
-  file_search_utilities.go  Search helper functions
+  file_search_utilities.go  Search helpers, scanning, and HTML tokenizing
   metadata_extractor.go     ePub metadata extraction
   models.go            Data models
   pooled_scanner.go    Scanner with sync.Pool
-  pooled_tokenizer.go  HTML tokenizer with sync.Pool
-  regex_cache.go       Compiled regex caching
 ```
 
 ---
@@ -85,7 +83,7 @@ pkg/epubproc/          Core library package
 task deps
 
 # Upgrade all dependencies and run tests
-task deps:upgrade
+task deps:update
 
 # Run all tests
 task test
@@ -197,6 +195,9 @@ When planning or reviewing tests, evaluate the following areas:
 
 ## Documentation Guidelines
 
+- Code comments should explain _why_, not _what_ — if a reader could delete the comment and still understand the code
+  from naming alone, the comment shouldn't be there. This applies to doc comments too: keep type/function-level godoc
+  comments, but skip field- or line-level comments that just restate the identifier in sentence form.
 - Use clear, simple English — avoid idioms, jargon, and overly complex sentences
 - Assume some readers may not speak English as their first language
 - Assume some readers may be newer developers; do not assume deep background knowledge

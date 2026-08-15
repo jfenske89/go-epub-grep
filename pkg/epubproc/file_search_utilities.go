@@ -6,7 +6,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -19,14 +18,8 @@ import (
 
 // grepInEpub searches for a compiled regex pattern within a single epub file.
 func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, contextLines int) ([]Match, error) {
-	// get file info for better error context
-	fileInfo, fileErr := os.Stat(epubPath)
-
 	r, err := zip.OpenReader(epubPath)
 	if err != nil {
-		if fileErr == nil {
-			return nil, fmt.Errorf("failed to open epub '%s' (size: %d bytes): %w", epubPath, fileInfo.Size(), err)
-		}
 		return nil, fmt.Errorf("failed to open epub '%s': %w", epubPath, err)
 	}
 	defer func() {
@@ -252,7 +245,6 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 	var currentLine strings.Builder
 	currentLine.Grow(512) // pre-allocate for typical line length
 
-	// isBlockLevelTag checks if a tag is a block-level element that should create a line break
 	isBlockLevelTag := func(tagName string) bool {
 		switch tagName {
 		case "p", "div", "br", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "hr", "pre", "tr", "table":
@@ -262,7 +254,6 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 		}
 	}
 
-	// flushLine processes the accumulated text in currentLine, normalizes it, and appends it to textLines unless empty
 	flushLine := func() {
 		// normalize whitespace by splitting on fields and rejoining with single spaces
 		// this correctly handles text from multiple tags and removes extra whitespace
@@ -441,13 +432,67 @@ func shouldSkipFile(fileName string) bool {
 	return false
 }
 
-// matchesMetadataFilters checks if the given metadata matches the specified filters.
-func matchesMetadataFilters(metadata Metadata, filters *SearchRequestFilters) bool {
+// filterMatchers holds precompiled word-boundary regexes for a request's metadata filters,
+// used when SearchRequestFilters.MatchMode is FilterMatchWord. Fields are nil for filters that
+// are unset or when MatchMode is FilterMatchExact.
+type filterMatchers struct {
+	author *regexp.Regexp
+	series *regexp.Regexp
+	title  *regexp.Regexp
+}
+
+// newFilterMatchers compiles word-boundary regexes for the given filters, once per search
+// request. It returns nil when filters is nil or MatchMode is not FilterMatchWord, since
+// FilterMatchExact needs no compiled pattern.
+func newFilterMatchers(filters *SearchRequestFilters) (*filterMatchers, error) {
+	if filters == nil || filters.MatchMode != FilterMatchWord {
+		return nil, nil
+	}
+
+	var matchers filterMatchers
+	var err error
+
+	if filters.AuthorEquals != "" {
+		if matchers.author, err = compileWordBoundaryPattern(filters.AuthorEquals); err != nil {
+			return nil, fmt.Errorf("invalid author filter: %w", err)
+		}
+	}
+	if filters.SeriesEquals != "" {
+		if matchers.series, err = compileWordBoundaryPattern(filters.SeriesEquals); err != nil {
+			return nil, fmt.Errorf("invalid series filter: %w", err)
+		}
+	}
+	if filters.TitleEquals != "" {
+		if matchers.title, err = compileWordBoundaryPattern(filters.TitleEquals); err != nil {
+			return nil, fmt.Errorf("invalid title filter: %w", err)
+		}
+	}
+
+	return &matchers, nil
+}
+
+// compileWordBoundaryPattern builds a case-insensitive regex that matches value as a whole word
+// or phrase, bounded by non-letter/non-digit characters (or string start/end) on both ends.
+// Unicode letter/number classes are used instead of \b, since Go's regexp \b only recognizes
+// ASCII word characters.
+func compileWordBoundaryPattern(value string) (*regexp.Regexp, error) {
+	pattern := `(?i)(^|[^\p{L}\p{N}])` + regexp.QuoteMeta(value) + `([^\p{L}\p{N}]|$)`
+	return regexp.Compile(pattern)
+}
+
+// matchesMetadataFilters checks if the given metadata matches the specified filters. matchers
+// holds precompiled word-boundary regexes for FilterMatchWord mode, or nil for FilterMatchExact.
+func matchesMetadataFilters(metadata Metadata, filters *SearchRequestFilters, matchers *filterMatchers) bool {
+	var authorPattern, seriesPattern, titlePattern *regexp.Regexp
+	if matchers != nil {
+		authorPattern, seriesPattern, titlePattern = matchers.author, matchers.series, matchers.title
+	}
+
 	// handle AuthorEquals filter
 	if filters.AuthorEquals != "" {
 		found := false
 		for _, author := range metadata.Authors {
-			if strings.EqualFold(author, filters.AuthorEquals) {
+			if matchesFilterValue(author, filters.AuthorEquals, authorPattern) {
 				found = true
 				break
 			}
@@ -459,17 +504,26 @@ func matchesMetadataFilters(metadata Metadata, filters *SearchRequestFilters) bo
 
 	// handle SeriesEquals filter
 	if filters.SeriesEquals != "" {
-		if !strings.EqualFold(metadata.Series, filters.SeriesEquals) {
+		if !matchesFilterValue(metadata.Series, filters.SeriesEquals, seriesPattern) {
 			return false
 		}
 	}
 
 	// handle TitleEquals filter
 	if filters.TitleEquals != "" {
-		if !strings.EqualFold(metadata.Title, filters.TitleEquals) {
+		if !matchesFilterValue(metadata.Title, filters.TitleEquals, titlePattern) {
 			return false
 		}
 	}
 
 	return true
+}
+
+// matchesFilterValue compares a metadata field against a filter value: word-boundary containment
+// via wordPattern when set (FilterMatchWord), or case-insensitive equality otherwise (FilterMatchExact).
+func matchesFilterValue(field, filterValue string, wordPattern *regexp.Regexp) bool {
+	if wordPattern != nil {
+		return wordPattern.MatchString(field)
+	}
+	return strings.EqualFold(field, filterValue)
 }

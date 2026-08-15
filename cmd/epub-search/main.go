@@ -17,7 +17,6 @@ import (
 	"github.com/jfenske89/go-epub-grep/pkg/epubproc"
 )
 
-// searchFlags holds command-line flags for the search command
 type searchFlags struct {
 	epubDir         string
 	pattern         string
@@ -29,25 +28,23 @@ type searchFlags struct {
 	authorEquals    string
 	seriesEquals    string
 	titleEquals     string
+	filterMatch     string
 	filesIn         []string
 	pretty          bool
 	logLevel        string
 }
 
-// searchOutput represents search output in JSON format
 type searchOutput struct {
 	Results []searchResult `json:"results"`
 	Summary summaryInfo    `json:"summary"`
 }
 
-// searchResult represents a search result with metadata and matches
 type searchResult struct {
 	Path     string             `json:"path"`
 	Metadata *epubproc.Metadata `json:"metadata,omitempty"`
 	Matches  []epubproc.Match   `json:"matches"`
 }
 
-// summaryInfo provides search result summary
 type summaryInfo struct {
 	TotalFiles   int `json:"totalFiles"`
 	TotalMatches int `json:"totalMatches"`
@@ -61,7 +58,6 @@ func main() {
 	}
 }
 
-// createRootCmd creates the root command with flags
 func createRootCmd(ctx context.Context) *cobra.Command {
 	flags := &searchFlags{}
 
@@ -89,7 +85,6 @@ Supports plain text and regex pattern matching with metadata extraction and filt
 	return rootCmd
 }
 
-// createSearchCmd creates the search command with flags
 func createSearchCmd(ctx context.Context, flags *searchFlags) *cobra.Command {
 	searchCmd := &cobra.Command{
 		Use:   "search",
@@ -105,9 +100,8 @@ Supports concurrent processing, metadata extraction, and filtering options.`,
 	return searchCmd
 }
 
-// setupSearchFlags configures flags for the search command
 func setupSearchFlags(cmd *cobra.Command, flags *searchFlags) {
-	// required flags
+	// register required flags
 	cmd.Flags().StringVarP(&flags.epubDir, "directory", "d", "", "Directory containing ePUB files (required)")
 	cmd.Flags().StringVarP(&flags.pattern, "pattern", "p", "", "Search pattern (required)")
 
@@ -121,9 +115,14 @@ func setupSearchFlags(cmd *cobra.Command, flags *searchFlags) {
 	cmd.Flags().BoolVar(&flags.extractMetadata, "extract-metadata", false, "Extract and include metadata in results")
 
 	// filter options
-	cmd.Flags().StringVar(&flags.authorEquals, "author", "", "Filter by author (requires --extract-metadata)")
-	cmd.Flags().StringVar(&flags.seriesEquals, "series", "", "Filter by series (requires --extract-metadata)")
-	cmd.Flags().StringVar(&flags.titleEquals, "title", "", "Filter by title (requires --extract-metadata)")
+	cmd.Flags().StringVar(&flags.authorEquals, "author", "",
+		"Filter by author (requires --extract-metadata; see --filter-match for matching behavior)")
+	cmd.Flags().StringVar(&flags.seriesEquals, "series", "",
+		"Filter by series (requires --extract-metadata; see --filter-match for matching behavior)")
+	cmd.Flags().StringVar(&flags.titleEquals, "title", "",
+		"Filter by title (requires --extract-metadata; see --filter-match for matching behavior)")
+	cmd.Flags().StringVar(&flags.filterMatch, "filter-match", string(epubproc.FilterMatchExact),
+		"Metadata filter matching mode: exact, word (requires --author, --series, or --title)")
 	cmd.Flags().StringSliceVar(&flags.filesIn, "files-in", nil, "Filter to specific ePUB files")
 
 	// output options
@@ -132,7 +131,7 @@ func setupSearchFlags(cmd *cobra.Command, flags *searchFlags) {
 	// logging options
 	cmd.Flags().StringVar(&flags.logLevel, "log-level", "warn", "Set logging level (disabled, error, warn, info, debug, trace)")
 
-	// required flags
+	// enforce required flags
 	if err := cmd.MarkFlagRequired("directory"); err != nil {
 		log.Err(err).Msg("failed to mark directory flag as required")
 	}
@@ -141,25 +140,28 @@ func setupSearchFlags(cmd *cobra.Command, flags *searchFlags) {
 	}
 }
 
-// runSearch executes the search command with the provided flags
 func runSearch(ctx context.Context, flags *searchFlags) error {
-	// configure logging
 	configureLogging(flags.logLevel)
 
-	// validate that metadata extraction is enabled when using metadata filters
 	if (flags.authorEquals != "" || flags.seriesEquals != "" || flags.titleEquals != "") && !flags.extractMetadata {
 		return fmt.Errorf("metadata filters (--author, --series, --title) require --extract-metadata")
 	}
 
-	// validate directory exists
+	matchMode := epubproc.FilterMatchMode(flags.filterMatch)
+	if matchMode != epubproc.FilterMatchExact && matchMode != epubproc.FilterMatchWord {
+		return fmt.Errorf("invalid --filter-match value %q: must be 'exact' or 'word'", flags.filterMatch)
+	}
+
+	if matchMode != epubproc.FilterMatchExact &&
+		flags.authorEquals == "" && flags.seriesEquals == "" && flags.titleEquals == "" {
+		return fmt.Errorf("--filter-match=%s requires at least one of --author, --series, --title", flags.filterMatch)
+	}
+
 	if _, err := os.Stat(flags.epubDir); os.IsNotExist(err) {
 		return fmt.Errorf("directory does not exist: %s", flags.epubDir)
 	}
 
-	// build search request
 	request := buildSearchRequest(flags)
-
-	// create a file search instance
 	fileSearch := epubproc.NewFileSearch(flags.epubDir, flags.maxThreads, flags.extractMetadata)
 
 	startedAt := time.Now()
@@ -202,7 +204,6 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 		Str("duration", time.Since(startedAt).String()).
 		Msg("ePUB search completed")
 
-	// process results and write output
 	output := searchOutput{
 		Results: results,
 		Summary: summaryInfo{
@@ -213,7 +214,6 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 	return outputJSON(output, flags.pretty)
 }
 
-// outputJSON marshals and outputs the search results as JSON
 func outputJSON(output searchOutput, pretty bool) error {
 	var jsonData []byte
 	var err error
@@ -232,23 +232,19 @@ func outputJSON(output searchOutput, pretty bool) error {
 	return nil
 }
 
-// buildSearchRequest constructs a SearchRequest from command-line flags
 func buildSearchRequest(flags *searchFlags) *epubproc.SearchRequest {
 	request := &epubproc.SearchRequest{
 		Context: flags.context,
 	}
 
-	// configure search query as regex or plain text
 	if flags.isRegex {
 		request.Query = epubproc.SearchRequestQuery{
-			IsRegex: true,
 			Regex: &epubproc.SearchRequestRegex{
 				Pattern: flags.pattern,
 			},
 		}
 	} else {
 		request.Query = epubproc.SearchRequestQuery{
-			IsRegex: false,
 			Text: &epubproc.SearchRequestText{
 				Value:      flags.pattern,
 				IgnoreCase: flags.ignoreCase,
@@ -256,25 +252,23 @@ func buildSearchRequest(flags *searchFlags) *epubproc.SearchRequest {
 		}
 	}
 
-	// configure filters
 	if flags.authorEquals != "" || flags.seriesEquals != "" || flags.titleEquals != "" || len(flags.filesIn) > 0 {
 		request.Filters = &epubproc.SearchRequestFilters{
 			AuthorEquals: flags.authorEquals,
 			SeriesEquals: flags.seriesEquals,
 			TitleEquals:  flags.titleEquals,
 			FilesIn:      flags.filesIn,
+			MatchMode:    epubproc.FilterMatchMode(flags.filterMatch),
 		}
 	}
 
 	return request
 }
 
-// configureLogging sets up zerolog based on the specified level
 func configureLogging(level string) {
 	level = strings.ToLower(level)
 
 	if level == "disabled" {
-		// disable logging
 		zerolog.SetGlobalLevel(zerolog.Disabled)
 		return
 	}
@@ -285,7 +279,6 @@ func configureLogging(level string) {
 		TimeFormat: "15:04:05",
 	})
 
-	// set log level
 	switch level {
 	case "trace":
 		zerolog.SetGlobalLevel(zerolog.TraceLevel)
