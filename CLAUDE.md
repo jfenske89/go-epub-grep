@@ -51,7 +51,7 @@ library. Designed for integration into self-hosted ePub library applications.
 
 **Core stack:**
 
-- **Language:** Go 1.26+
+- **Language:** Go 1.27+
 - **CLI framework:** Cobra
 - **Logging:** zerolog
 - **Concurrency:** sourcegraph/conc (structured concurrency)
