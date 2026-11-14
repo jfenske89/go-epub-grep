@@ -30,6 +30,12 @@ tasks:
     cmds:
       - go test ./...
 
+  test:cli:
+    desc: Smoke test the built CLI (needs jq and ./public-domain)
+    deps: [build]
+    cmds:
+      - ./test_cli.sh
+
   bench:
     cmds:
       - go test ./pkg/epubproc/ -bench=.

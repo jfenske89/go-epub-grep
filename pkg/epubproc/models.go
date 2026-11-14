@@ -3,6 +3,9 @@ package epubproc
 // SearchRequestRegex represents regex search configuration.
 type SearchRequestRegex struct {
 	Pattern string `json:"pattern"`
+
+	// IgnoreCase makes the pattern case-insensitive, like a leading "(?i)" in the pattern.
+	IgnoreCase bool `json:"ignoreCase,omitempty"`
 }
 
 // SearchRequestText represents text search configuration.
@@ -106,7 +109,6 @@ type rootfile struct {
 
 // MatchMetadata represents extracted metadata from a single search result.
 type MatchMetadata struct {
-	// Chapter is the name of the chapter, if found.
 	Chapter *string `json:"chapter,omitempty"`
 }
 
@@ -118,7 +120,8 @@ type Match struct {
 	// FileName is the name of the file inside the epub where the match was found.
 	FileName string `json:"fileName"`
 
-	// Metadata is optional match metadata, populated only if metadata extraction is enabled and a chapter is found.
+	// Metadata is optional match metadata. It is set when a chapter name is found for the file, from the
+	// table of contents or the package file, whether or not metadata extraction is enabled.
 	Metadata *MatchMetadata `json:"metadata,omitempty"`
 }
 

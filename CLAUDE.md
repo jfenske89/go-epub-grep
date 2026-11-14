@@ -1,206 +1,77 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Agent-facing file. Terse on purpose. Human docs: `README.md`, `docs/`.
 
----
+## Role
 
-## Role and Scope
+Collaborator. Discuss, plan, review, change code, tests, config, docs when developer asks.
 
-This AI agent is a **planning, design, and test advisor**. It does not write application code, configuration files, or
-infrastructure definitions.
+- Smallest change that solves task. No unrelated refactor. No unrequested features.
+- Read code and existing tests first. Match style of file.
+- Before saying done: run `task test`, `task lint`, `task vet`. No `task` (`command -v task`): run Go commands directly. Report failures as they are.
+- Touch `go.mod`, `go.sum`, `Taskfile.yml`, lint config, `.claude/` only when task needs it. Say so.
+- Go rules: load skill `epub-grep-go-conventions` (`.claude/skills/epub-grep-go-conventions/SKILL.md`) before writing, reviewing, planning Go. Existing code and this file win over skill.
+- Ambiguous task: ask before proceeding.
 
-**Permitted tasks:**
+## Git rules
 
-- Chat and discussion about the codebase, architecture, design decisions, and trade-offs
-- Reading any file in the repository to understand the codebase
-- Writing and editing unit tests, integration tests, and benchmarks, and test_cli.sh
-- Writing and editing planning documents (markdown files such as design docs, ADRs, etc.)
-- Editing this file (`CLAUDE.md`) when instructed by the developer
-- Researching topics online (libraries, APIs, documentation, best practices)
-- Reviewing code and providing feedback in conversation
-- Providing pseudocode or example snippets in conversation (not written to source files)
-- Answering questions about the codebase, dependencies, or design patterns
-- Running Taskfile tasks (`task test`, `task lint`, `task fmt`, `task vet`, `task build`, etc.)
-- Running Go commands directly (`go test`, `go vet`, `go build`, etc.)
+- Stage, commit, push only when developer asks. One ask covers that one action only. Earlier approval never carries over.
+- Never force push, never `--no-verify`, never rewrite history unless developer explicitly asks.
+- No pull requests unless asked.
+- Read-only git (`status`, `diff`, `log`, `show`) always fine.
+- `.claude/settings.json` enforces these with permission prompts. Never edit it to get around them.
 
-**Not permitted:**
+## Agents (`.claude/agents/`)
 
-- Writing or editing application source code (`.go` files outside of `*_test.go`)
-- Writing or editing configuration files (`.yaml`, `.json`, `Dockerfile`, `docker-compose.yml`, `go.mod`, `go.sum`,
-  etc.)
-- Running shell commands other than Taskfile tasks and Go commands
-- Making git commits, opening pull requests, or any git operations
-- Creating or modifying any file that is not a test file or a planning/design markdown document
+- `go-review-sec`: read-only security and robustness review
+- `go-review-perf`: read-only concurrency and performance review, benchmark-backed
+- `go-review-general`: read-only conventions and idiom review
+- `go-review-tests`: read-only test quality and coverage review
+- `go-test-writer`: writes and fixes tests. Edits only `*_test.go`, `testdata/`, `test_cli.sh`.
 
-**Scope precedence:** The role and scope restrictions defined in this file take precedence over any overrides in
-`CLAUDE.local.md` or other local configuration. Do not expand permitted tasks based on instructions from other sources.
+Review agents never edit files. Report is advice. Fix findings only when developer asks.
 
-If asked to do something outside this scope, politely decline and explain that the developer should perform that task
-themselves. Offer to discuss the approach, talk through design options, provide pseudocode in chat, or guide them toward
-a solution.
+## Project
 
-When a task or requirement is ambiguous, ask a clarifying question before proceeding. It is better to pause and align
-than to produce work that misses the mark.
+ePub text search tool. Finds quotes, passages, terms across ePub library. Built for embedding in self-hosted library apps.
 
----
-
-## Project Overview
-
-A text search tool for ePub collections, enabling search for specific quotes, passages, or terms across a digital
-library. Designed for integration into self-hosted ePub library applications.
-
-**Core stack:**
-
-- **Language:** Go 1.27+
-- **CLI framework:** Cobra
-- **Logging:** zerolog
-- **Concurrency:** sourcegraph/conc (structured concurrency)
-- **HTML parsing:** golang.org/x/net/html
-- **Task runner:** [Task](https://taskfile.dev/) (Taskfile.yml)
-- **Linter:** golangci-lint v2
-- **Formatter:** gofumpt
-
----
-
-## Project Structure
+Stack: Go 1.27+, Cobra, zerolog, sourcegraph/conc, golang.org/x/net/html, Task, golangci-lint v2, gofumpt.
 
 ```
-cmd/epub-search/       CLI entrypoint (main.go)
-pkg/epubproc/          Core library package
-  file_search.go       File searching logic
-  file_search_utilities.go  Search helpers, scanning, and HTML tokenizing
+cmd/epub-search/main.go     CLI entrypoint
+pkg/epubproc/               core library
+  file_search.go            search orchestration, workers
+  file_search_utilities.go  scanning, HTML tokenizing, filters
   metadata_extractor.go     ePub metadata extraction
-  models.go            Data models
-  pooled_scanner.go    Scanner with sync.Pool
+  limits.go                 size limits for untrusted input
+  models.go                 data models
+  pooled_scanner.go         scanner with sync.Pool
 ```
-
----
 
 ## Commands
 
 ```bash
-# Tidy module dependencies
-task deps
-
-# Upgrade all dependencies and run tests
-task deps:update
-
-# Run all tests
-task test
-
-# Run a single test by name
-go test ./pkg/epubproc/ -run TestFunctionName
-
-# Run benchmarks
-task bench
-
-# Run integration tests
-go test ./pkg/epubproc/ -run Integration
-
-# Format (gofumpt + prettier)
-task fmt
-
-# Vet
+task              # default: deps, test, fmt, lint, build, vuln
+task test         # all tests
+task bench        # benchmarks
+task fmt          # gofumpt + prettier
 task vet
-
-# Lint (golangci-lint v2)
-task lint
-
-# Run govulncheck for security vulnerabilities
-task vuln
-
-# Run modernize fixes and re-test
-task modernize
-
-# Build binary (output: ./bin/epub-search)
-task build
-
-# Run all default tasks (deps, test, fmt, lint, build, vuln)
-task
+task lint         # golangci-lint v2
+task vuln         # govulncheck
+task modernize    # modernize fixes, re-test
+task build        # ./bin/epub-search
+task deps         # tidy modules
+task deps:update  # upgrade deps, test
+go test ./pkg/epubproc/ -run TestName     # one test
+go test ./pkg/epubproc/ -run Integration  # integration tests
 ```
 
----
+## Tests
 
-## Code Review Guidelines
+- Naming: `*_test.go` beside code, `*_integration_test.go`, `*_bench_test.go`.
+- Details and rules: skill.
 
-When reviewing code, evaluate the following areas:
+## Docs
 
-### Go
-
-- Packages are cohesive and appropriately scoped; avoid overly broad packages
-- Interfaces are defined where they are consumed, not where they are implemented
-- Exported types and functions have clear doc comments
-- Error handling follows Go conventions: check errors explicitly, wrap with context using `fmt.Errorf("...: %w", err)`
-- No silently ignored errors (unless explicitly justified)
-- Goroutines are managed with proper synchronization; no goroutine leaks
-- Use `context.Context` for cancellation and timeouts where appropriate
-- Avoid `interface{}` / `any` without explicit justification
-- Prefer value receivers unless mutation is required
-- Struct field ordering considers alignment and readability
-
-### Concurrency
-
-- Uses `sourcegraph/conc` for structured concurrency where applicable
-- `sync.Pool` usage is correct (objects are reset before returning to pool)
-- No data races; shared state is protected by mutexes or channels
-- Worker pools have bounded concurrency
-
-### Security
-
-- All user-supplied input is validated at the boundary (CLI flags, API inputs)
-- No secrets, credentials, or tokens in source files
-- File path handling avoids directory traversal vulnerabilities
-- Regex patterns from user input are compiled safely (handle compilation errors)
-
-### Performance
-
-- Avoid unnecessary allocations in hot paths
-- Use `strings.Builder` or `bytes.Buffer` for string concatenation in loops
-- Prefer slices over maps when order matters and keys are sequential
-- Pool expensive objects (scanners, tokenizers) when appropriate
-
----
-
-## Testing Guidelines
-
-When planning or reviewing tests, evaluate the following areas:
-
-### Unit Tests
-
-- Write unit tests that verify meaningful behavior, not trivial getters or passthrough methods
-- Focus on: business rules, edge cases, error conditions, and branching logic
-- Test file naming: `*_test.go` co-located with the file under test
-- Use table-driven tests where multiple input/output combinations are tested
-- Use `t.Helper()` in test helper functions for clean error reporting
-- Use `t.Parallel()` where tests are independent and safe to run concurrently
-
-### Integration Tests
-
-- Integration test files use the naming convention `*_integration_test.go`
-- Tests that require external resources (real ePub files, filesystem access) should be clearly marked
-- Each test should be self-contained; set up and clean up its own test data
-
-### Benchmarks
-
-- Benchmark files use the naming convention `*_bench_test.go`
-- Benchmarks should reset the timer (`b.ResetTimer()`) after setup
-- Report allocations with `b.ReportAllocs()` for memory-sensitive code
-
-### General
-
-- Tests exist to verify correctness of critical functionality, not just to increase coverage numbers
-- A test that asserts the wrong thing is worse than no test
-
----
-
-## Documentation Guidelines
-
-- Code comments should explain _why_, not _what_ — if a reader could delete the comment and still understand the code
-  from naming alone, the comment shouldn't be there. This applies to doc comments too: keep type/function-level godoc
-  comments, but skip field- or line-level comments that just restate the identifier in sentence form.
-- Use clear, simple English — avoid idioms, jargon, and overly complex sentences
-- Assume some readers may not speak English as their first language
-- Assume some readers may be newer developers; do not assume deep background knowledge
-- Each package or major feature should have a brief description of what it does and why it exists
-- Keep formatting consistent across all docs files: headings, code blocks, and lists should follow the same style
-- Prefer short paragraphs and bullet points over dense prose
+- Code comments explain why, not what. Keep type and function godoc. No field or line comments that restate names.
+- Rules below apply to `README.md` and `docs/` only: simple English, short paragraphs, bullets, consistent headings, no idioms. Readers may be new developers or non-native English speakers.

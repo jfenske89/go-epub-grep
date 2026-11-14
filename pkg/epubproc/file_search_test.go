@@ -1,53 +1,30 @@
 package epubproc
 
 import (
+	"runtime"
 	"testing"
 )
 
-// TestNewFileSearch verifies that FileSearch instances are created correctly.
-func TestNewFileSearch(t *testing.T) {
-	epubDir := "/test/path"
-
-	// test with default thread count
-	fs := NewFileSearch(epubDir, 0, false)
-	if fs == nil {
-		t.Fatal("Expected FileSearch instance, got nil")
+// TestNewFileSearchDefaultThreads verifies that a thread count of zero or less falls back to the CPU count,
+// and that a positive count is kept.
+func TestNewFileSearchDefaultThreads(t *testing.T) {
+	tests := []struct {
+		name       string
+		maxThreads int
+		want       int
+	}{
+		{"zero", 0, runtime.NumCPU()},
+		{"negative", -1, runtime.NumCPU()},
+		{"positive", 3, 3},
 	}
 
-	// test with specific thread count
-	fs2 := NewFileSearch(epubDir, 4, true)
-	if fs2 == nil {
-		t.Fatal("Expected FileSearch instance, got nil")
-	}
-}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fs := NewFileSearch("/test", test.maxThreads, false).(*fileSearchImpl)
 
-// TestFileSearchImpl verifies that the fileSearchImpl struct is properly initialized.
-func TestFileSearchImpl(t *testing.T) {
-	epubDir := "/test/epub/dir"
-	maxThreads := 8
-	extractMetadata := true
-
-	fs := NewFileSearch(epubDir, maxThreads, extractMetadata).(*fileSearchImpl)
-
-	if fs.epubDir != epubDir {
-		t.Errorf("Expected epubDir '%s', got '%s'", epubDir, fs.epubDir)
-	}
-
-	if fs.maxThreads != maxThreads {
-		t.Errorf("Expected maxThreads %d, got %d", maxThreads, fs.maxThreads)
-	}
-
-	if fs.extractMetadata != extractMetadata {
-		t.Errorf("Expected extractMetadata %t, got %t", extractMetadata, fs.extractMetadata)
-	}
-}
-
-// TestFileSearchDefaultThreads verifies that default thread count is set correctly.
-func TestFileSearchDefaultThreads(t *testing.T) {
-	fs := NewFileSearch("/test", -1, false).(*fileSearchImpl)
-
-	// should default to runtime.NumCPU()
-	if fs.maxThreads <= 0 {
-		t.Errorf("Expected positive thread count, got %d", fs.maxThreads)
+			if fs.maxThreads != test.want {
+				t.Errorf("Expected %d threads, got %d", test.want, fs.maxThreads)
+			}
+		})
 	}
 }

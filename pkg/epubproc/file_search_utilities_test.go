@@ -2,6 +2,7 @@ package epubproc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -150,21 +151,21 @@ func TestScanHTMLFileWithContext(t *testing.T) {
 func TestGetFileType(t *testing.T) {
 	tests := []struct {
 		filename string
-		expected string
+		expected fileType
 	}{
-		{"test.txt", "text"},
-		{"page.html", "html"},
-		{"content.xhtml", "html"},
-		{"metadata.xml", "html"},
-		{"image.png", ""},
-		{"", ""},
-		{"test", ""},
+		{"test.txt", fileTypeText},
+		{"page.html", fileTypeHTML},
+		{"content.xhtml", fileTypeHTML},
+		{"metadata.xml", fileTypeHTML},
+		{"image.png", fileTypeOther},
+		{"", fileTypeOther},
+		{"test", fileTypeOther},
 	}
 
 	for _, test := range tests {
 		result := getFileType(test.filename)
 		if result != test.expected {
-			t.Errorf("getFileType(%s): expected %s, got %s", test.filename, test.expected, result)
+			t.Errorf("getFileType(%s): expected %d, got %d", test.filename, test.expected, result)
 		}
 	}
 }
@@ -370,34 +371,43 @@ func TestMatchesMetadataFiltersWordMode(t *testing.T) {
 	}
 }
 
-// TestScanTextFileErrors tests error handling in scanTextFile
+// dataThenErrorReader returns its data once and then fails, like a damaged zip entry that is read halfway.
+type dataThenErrorReader struct {
+	data string
+	done bool
+}
+
+func (r *dataThenErrorReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, errors.New("read failed")
+	}
+	r.done = true
+	return copy(p, r.data), nil
+}
+
+// TestScanTextFileErrors verifies that a read error keeps the matches found before it.
 func TestScanTextFileErrors(t *testing.T) {
-	// test with invalid reader that causes scanner errors
-	t.Run("ScannerError", func(t *testing.T) {
-		// create a reader that will cause an error
-		errorReader := &errorReader{}
-		pattern, _ := regexp.Compile("test")
+	pattern := regexp.MustCompile("test")
 
-		matches := scanTextFile(errorReader, pattern, "test.txt", 0)
+	for _, contextLines := range []int{0, 1} {
+		t.Run(fmt.Sprintf("NoDataContext%d", contextLines), func(t *testing.T) {
+			matches := scanTextFile(&errorReader{}, pattern, "test.txt", contextLines)
 
-		// should return nil on scanner error
-		if matches != nil {
-			t.Errorf("Expected nil matches on scanner error, got %v", matches)
-		}
-	})
+			if len(matches) != 0 {
+				t.Errorf("Expected no matches when nothing could be read, got %v", matches)
+			}
+		})
 
-	// test context scanner error
-	t.Run("ScannerErrorWithContext", func(t *testing.T) {
-		errorReader := &errorReader{}
-		pattern, _ := regexp.Compile("test")
+		t.Run(fmt.Sprintf("MatchesBeforeErrorContext%d", contextLines), func(t *testing.T) {
+			reader := &dataThenErrorReader{data: "first test line\nsecond line\n"}
 
-		matches := scanTextFile(errorReader, pattern, "test.txt", 1)
+			matches := scanTextFile(reader, pattern, "test.txt", contextLines)
 
-		// should return nil on scanner error
-		if matches != nil {
-			t.Errorf("Expected nil matches on scanner error, got %v", matches)
-		}
-	})
+			if len(matches) != 1 || !strings.Contains(matches[0].Line, "first test line") {
+				t.Errorf("Expected the match before the read error to be kept, got %+v", matches)
+			}
+		})
+	}
 }
 
 // TestScanHTMLFileErrors tests error handling in scanHTMLFile

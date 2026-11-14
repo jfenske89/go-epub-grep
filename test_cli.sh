@@ -1,6 +1,8 @@
 #!/bin/bash
 
-# Tests plain text search, regex search, and search with filters using public domain ePUBs
+# Smoke test for the built CLI. Tests plain text search, regex search, and search with filters
+# against public domain ePUBs and checks the results, not only the exit code.
+# Needs jq, ./bin/epub-search (task build) and a ./public-domain directory (not committed).
 
 set -euo pipefail  # Exit on error, undefined vars, pipe failures
 
@@ -14,6 +16,10 @@ readonly TEXT_QUERY="Holmes"
 readonly REGEX_QUERY="Holmes|Watson"
 readonly FILTER_AUTHOR="Arthur Conan Doyle"
 readonly FILTER_TITLE="A Study in Scarlet"
+readonly NO_MATCH_QUERY="zzqxj-no-such-text-9731"
+
+# Set by test_metadata_extraction, read by test_filtered_search
+UNFILTERED_FILES=0
 
 # --- Functions ---
 
@@ -147,6 +153,24 @@ validate_setup() {
     log_info "ePUB Files Found: $epub_count"
 }
 
+# Output of the last successful run_cli_command, used by the assert_* helpers.
+LAST_OUTPUT=""
+
+# Fail unless a jq filter is true for the last output. Extra args go to jq (for example --arg).
+assert_jq() {
+    local description="$1"
+    local filter="$2"
+    shift 2
+
+    if ! jq -e "$@" "$filter" <<< "$LAST_OUTPUT" > /dev/null; then
+        log_error "Assertion failed: $description"
+        log_error "jq filter: $filter"
+        jq -c '.summary' <<< "$LAST_OUTPUT" >&2 || true
+        return 1
+    fi
+    log_success "Assertion passed: $description"
+}
+
 run_cli_command() {
     local description="$1"
     shift
@@ -184,6 +208,7 @@ run_cli_command() {
     fi
     
     log_success "$description completed successfully (${formatted_duration})"
+    LAST_OUTPUT="$output"
     
     # Show JSON output only in verbose mode
     if [[ "${VERBOSE:-false}" == "true" ]]; then
@@ -211,6 +236,17 @@ test_plain_text_search() {
         --ignore-case \
         --context 1 \
         --pretty
+    assert_jq "plain text search finds matches" '.summary.totalMatches > 0 and .summary.totalFiles > 0'
+    assert_jq "every result has matches and a path" 'all(.results[]; (.matches | length) > 0 and .path != "")'
+    assert_jq "match text contains the query" \
+        'all(.results[].matches[]; .line | ascii_downcase | contains($q | ascii_downcase))' --arg q "$TEXT_QUERY"
+    
+    log_info "Searching for text that is not in any book"
+    run_cli_command "No-match search" \
+        search \
+        --directory "$EPUB_DIR" \
+        --pattern "$NO_MATCH_QUERY"
+    assert_jq "nonsense query finds nothing" '.summary.totalMatches == 0 and .summary.totalFiles == 0'
     
     log_success "Plain text search test passed"
 }
@@ -226,6 +262,9 @@ test_regex_search() {
         --regex \
         --context 2 \
         --pretty
+    assert_jq "regex search finds matches" '.summary.totalMatches > 0 and .summary.totalFiles > 0'
+    assert_jq "every match contains one of the alternatives" \
+        'all(.results[].matches[]; .line | test("Holmes|Watson"))'
     
     log_success "Regex search test passed"
 }
@@ -241,6 +280,12 @@ test_metadata_extraction() {
         --extract-metadata \
         --context 1 \
         --pretty
+    assert_jq "metadata search finds matches" '.summary.totalMatches > 0'
+    assert_jq "every result has a title and authors" \
+        'all(.results[]; (.metadata.title // "") != "" and (.metadata.authors | length) > 0)'
+    
+    # remember the unfiltered file count so the filter tests can check that filtering narrows the result
+    UNFILTERED_FILES=$(jq -r '.summary.totalFiles' <<< "$LAST_OUTPUT")
     
     log_success "Metadata extraction test passed"
 }
@@ -258,6 +303,11 @@ test_filtered_search() {
         --author "$FILTER_AUTHOR" \
         --context 1 \
         --pretty
+    assert_jq "author filter returns results" '.summary.totalFiles > 0'
+    assert_jq "author filter returns only that author" \
+        'all(.results[]; .metadata.authors | any(ascii_downcase == ($a | ascii_downcase)))' --arg a "$FILTER_AUTHOR"
+    assert_jq "author filter returns fewer files than the unfiltered search" \
+        '.summary.totalFiles < ($n | tonumber)' --arg n "$UNFILTERED_FILES"
     
     log_info "Testing title filter: '$FILTER_TITLE'"
     
@@ -270,22 +320,30 @@ test_filtered_search() {
         --title "$FILTER_TITLE" \
         --context 1 \
         --pretty
+    assert_jq "title filter returns results" '.summary.totalFiles > 0'
+    assert_jq "title filter returns only that title" \
+        'all(.results[]; .metadata.title | ascii_downcase == ($t | ascii_downcase))' --arg t "$FILTER_TITLE"
     
-    # Test files-in filter with specific files
+    # --files-in needs paths that equal the walked paths, so use an absolute directory for this check
+    local abs_dir
+    abs_dir=$(cd "$EPUB_DIR" && pwd)
     local specific_files=(
-        "$EPUB_DIR/A Study in Scarlet - Arthur Conan Doyle.epub"
-        "$EPUB_DIR/The Adventures of Sherlock Holmes - Arthur Conan Doyle.epub"
+        "$abs_dir/A Study in Scarlet - Arthur Conan Doyle.epub"
+        "$abs_dir/The Adventures of Sherlock Holmes - Arthur Conan Doyle.epub"
     )
     
     log_info "Testing files-in filter with specific files"
     
     run_cli_command "Files-in filter search" \
         search \
-        --directory "$EPUB_DIR" \
+        --directory "$abs_dir" \
         --pattern "$TEXT_QUERY" \
         --files-in "${specific_files[0]},${specific_files[1]}" \
         --context 1 \
         --pretty
+    assert_jq "files-in returns exactly the two requested files" \
+        '.summary.totalFiles == 2 and ([.results[].path] | sort) == ($f | sort)' \
+        --argjson f "$(printf '%s\n' "${specific_files[@]}" | jq -R . | jq -s .)"
     
     log_success "Filtered search test passed"
 }
@@ -341,6 +399,14 @@ test_error_handling() {
         return 1
     fi
     log_success "Invalid regex properly rejected"
+    
+    # Test negative context
+    log_info "Testing negative context..."
+    if "$CLI_BIN" search --directory "$EPUB_DIR" --pattern "test" --context -1 >/dev/null 2>&1; then
+        log_error "Expected error for negative context, but command succeeded"
+        return 1
+    fi
+    log_success "Negative context properly rejected"
     
     log_success "Error handling test passed"
 }

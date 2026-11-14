@@ -20,6 +20,10 @@ import (
 )
 
 // MetadataHandler defines a handler function for epub metadata.
+//
+// ProcessDirectory calls the handler from up to maxThreads goroutines at the same time, in no fixed order, so the
+// handler must be safe for concurrent use. If the handler returns an error, ProcessDirectory cancels the remaining
+// work and returns that error.
 type MetadataHandler func(epubPath string, metadata *Metadata) error
 
 // MetadataExtractor defines the interface for extracting metadata from epub files.
@@ -35,7 +39,6 @@ type MetadataExtractor interface {
 }
 
 type metadataExtractorImpl struct {
-	// maxThreads is the maximum number of worker goroutines to use
 	maxThreads int
 }
 
@@ -64,7 +67,7 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 		defer close(paths)
 		return filepath.WalkDir(epubDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
-				return fmt.Errorf("error walking directory '%s': %w", epubDir, err)
+				return handleWalkError(epubDir, path, d, fmt.Errorf("error walking directory '%s': %w", epubDir, err))
 			}
 
 			if !d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".epub") {
@@ -82,7 +85,7 @@ func (m *metadataExtractorImpl) ProcessDirectory(ctx context.Context, epubDir st
 	})
 
 	// worker goroutines to process files
-	for i := 0; i < m.maxThreads; i++ {
+	for range m.maxThreads {
 		p.Go(func(ctx context.Context) error {
 			for path := range paths {
 				select {
@@ -153,7 +156,7 @@ func (m *metadataExtractorImpl) ProcessFile(ctx context.Context, epubPath string
 		}
 	}()
 
-	opfPath, err := findOpfPath(&r.Reader)
+	opfPath, err := findOPFPath(&r.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find opf path in %s: %w", epubPath, err)
 	}
@@ -172,6 +175,10 @@ func (m *metadataExtractorImpl) ProcessFile(ctx context.Context, epubPath string
 		return nil, fmt.Errorf("opf file '%s' not found in epub '%s'", opfPath, epubPath)
 	}
 
+	if err := checkEntrySize(opfFile, limits.xml); err != nil {
+		return nil, fmt.Errorf("cannot read opf file in epub '%s': %w", epubPath, err)
+	}
+
 	rc, err := opfFile.Open()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open opf file '%s' in epub '%s': %w", opfPath, epubPath, err)
@@ -183,7 +190,7 @@ func (m *metadataExtractorImpl) ProcessFile(ctx context.Context, epubPath string
 	}()
 
 	var opfData opfPackageFile
-	decoder := xml.NewDecoder(rc)
+	decoder := xml.NewDecoder(newLimitedReader(rc, limits.xml))
 
 	// some epubs have invalid charsets declared, but are utf-8
 	// this is a common issue so configure the decoder to be lenient
@@ -263,8 +270,8 @@ func (m *metadataExtractorImpl) ProcessFile(ctx context.Context, epubPath string
 	return metadata, nil
 }
 
-// findOpfPath locates the OPF (Open Packaging Format) file within an epub archive.
-func findOpfPath(r *zip.Reader) (string, error) {
+// findOPFPath locates the OPF (Open Packaging Format) file within an epub archive.
+func findOPFPath(r *zip.Reader) (string, error) {
 	var containerFile *zip.File
 	for _, f := range r.File {
 		if f.Name == "META-INF/container.xml" {
@@ -283,18 +290,22 @@ func findOpfPath(r *zip.Reader) (string, error) {
 		return "", fmt.Errorf("META-INF/container.xml not found and no .opf file in archive")
 	}
 
+	if err := checkEntrySize(containerFile, limits.xml); err != nil {
+		return "", fmt.Errorf("cannot read container.xml: %w", err)
+	}
+
 	rc, err := containerFile.Open()
 	if err != nil {
 		return "", fmt.Errorf("failed to open container.xml: %w", err)
 	}
 	defer func() {
 		if err := rc.Close(); err != nil {
-			log.Err(err).Msg("failed to close container.xml")
+			log.Warn().Err(err).Msg("failed to close container.xml")
 		}
 	}()
 
 	var container containerXML
-	if err := xml.NewDecoder(rc).Decode(&container); err != nil {
+	if err := xml.NewDecoder(newLimitedReader(rc, limits.xml)).Decode(&container); err != nil {
 		return "", fmt.Errorf("failed to parse container.xml: %w", err)
 	}
 

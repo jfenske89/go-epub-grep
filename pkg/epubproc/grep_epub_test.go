@@ -3,6 +3,7 @@ package epubproc
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -58,7 +59,7 @@ func TestGrepInEpub(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -93,7 +94,7 @@ func TestGrepInEpub(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("Target")
+		pattern := regexp.MustCompile("Target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 1)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -129,7 +130,7 @@ func TestGrepInEpub(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -156,7 +157,7 @@ func TestGrepInEpub(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 
 		// create a context that's already cancelled
 		ctx, cancel := context.WithCancel(context.Background())
@@ -181,7 +182,7 @@ func TestGrepInEpub(t *testing.T) {
 			t.Fatalf("Failed to create test ZIP: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -204,7 +205,7 @@ func TestGrepInEpubErrors(t *testing.T) {
 
 	// test with non-existent file
 	t.Run("NonExistentFile", func(t *testing.T) {
-		pattern, _ := regexp.Compile("test")
+		pattern := regexp.MustCompile("test")
 		_, err := grepInEpub(context.Background(), "/non/existent/file.epub", pattern, 0)
 
 		if err == nil {
@@ -228,16 +229,16 @@ func TestGrepInEpubErrors(t *testing.T) {
 		file.WriteString("This is not a valid ZIP file")
 		file.Close()
 
-		pattern, _ := regexp.Compile("test")
+		pattern := regexp.MustCompile("test")
 		_, err = grepInEpub(context.Background(), invalidZipPath, pattern, 0)
 		if err == nil {
 			t.Error("Expected error for invalid ZIP file")
 		}
 	})
 
-	// test with corrupted ZIP entry (simulated by timeout during processing)
-	t.Run("ProcessingTimeout", func(t *testing.T) {
-		epubPath := filepath.Join(tempDir, "timeout.epub")
+	// a cancelled context must stop the scan and return the context error
+	t.Run("CancelledContext", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "cancelled.epub")
 		files := map[string]string{
 			"content.txt": "target content here",
 		}
@@ -246,21 +247,32 @@ func TestGrepInEpubErrors(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
 
-		// create context with very short timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Microsecond)
+		_, err := grepInEpub(ctx, epubPath, regexp.MustCompile("target"), 0)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Expected context.Canceled, got: %v", err)
+		}
+	})
+
+	// an expired deadline must be reported as DeadlineExceeded, not as a cancel
+	t.Run("ExpiredDeadline", func(t *testing.T) {
+		epubPath := filepath.Join(tempDir, "expired.epub")
+		files := map[string]string{
+			"content.txt": "target content here",
+		}
+
+		if err := createTestZIPWithFiles(epubPath, files); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		defer cancel()
 
-		// wait to ensure timeout
-		time.Sleep(10 * time.Microsecond)
-
-		// should get context timeout or cancellation
-		_, err := grepInEpub(ctx, epubPath, pattern, 0)
-		if err == nil {
-			t.Error("Expected timeout error")
-		} else if err != context.DeadlineExceeded && err != context.Canceled {
-			t.Errorf("Expected timeout or cancellation error, got: %v", err)
+		_, err := grepInEpub(ctx, epubPath, regexp.MustCompile("target"), 0)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("Expected context.DeadlineExceeded, got: %v", err)
 		}
 	})
 }
@@ -301,7 +313,7 @@ func TestGrepInEpubChapterMetadata(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -355,7 +367,7 @@ func TestGrepInEpubChapterMetadata(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -389,7 +401,7 @@ func TestGrepInEpubChapterMetadata(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -424,7 +436,7 @@ func TestGrepInEpubChapterMetadata(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -452,7 +464,7 @@ func TestGrepInEpubChapterMetadata(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub should not return an error on malformed toc.ncx, got: %v", err)
@@ -487,7 +499,7 @@ func TestGrepInEpubChapterMetadata(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -533,7 +545,7 @@ func TestGrepInEpubContentOpfFallback(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -604,7 +616,7 @@ func TestGrepInEpubContentOpfFallback(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -638,7 +650,7 @@ func TestGrepInEpubContentOpfFallback(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -670,7 +682,7 @@ func TestGrepInEpubContentOpfFallback(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -698,7 +710,7 @@ func TestGrepInEpubContentOpfFallback(t *testing.T) {
 			t.Fatalf("Failed to create test ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub should not return an error on malformed content.opf, got: %v", err)
@@ -729,7 +741,7 @@ func TestGrepInEpubEdgeCases(t *testing.T) {
 			t.Fatalf("Failed to create empty ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -750,7 +762,7 @@ func TestGrepInEpubEdgeCases(t *testing.T) {
 			t.Fatalf("Failed to create ePUB with empty files: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 0)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)
@@ -782,7 +794,7 @@ func TestGrepInEpubEdgeCases(t *testing.T) {
 			t.Fatalf("Failed to create ePUB: %v", err)
 		}
 
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 		matches, err := grepInEpub(context.Background(), epubPath, pattern, 20)
 		if err != nil {
 			t.Fatalf("grepInEpub failed: %v", err)

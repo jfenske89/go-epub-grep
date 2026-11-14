@@ -1,6 +1,7 @@
 package epubproc
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -49,35 +50,57 @@ func TestPooledScannerReset(t *testing.T) {
 	}
 }
 
-// TestScannerPoolReuse verifies that the scanner pool correctly reuses instances.
-func TestScannerPoolReuse(t *testing.T) {
-	// get a scanner from the pool
-	scanner1 := scannerPool.Get()
-	if scanner1 == nil {
-		t.Fatal("Pool returned nil scanner")
+// TestPooledScannerResetKeepsNoOldState verifies that a reset scanner shows nothing from its previous reader,
+// including an error left by that reader.
+func TestPooledScannerResetKeepsNoOldState(t *testing.T) {
+	// a line longer than the 256 KB token limit leaves the scanner in an error state
+	ps := newPooledScanner(strings.NewReader(strings.Repeat("x", 300*1024)))
+	if ps.scanner.Scan() {
+		t.Fatal("Expected the oversized line to stop the scan")
+	}
+	if ps.scanner.Err() == nil {
+		t.Fatal("Expected an error for the oversized line")
 	}
 
-	// return it to the pool
-	scannerPool.Put(scanner1)
+	ps.reset(strings.NewReader("alpha\nbeta"))
 
-	// get another scanner - should be the same instance if pool is working
-	scanner2 := scannerPool.Get()
-	if scanner2 == nil {
-		t.Fatal("Pool returned nil scanner on second get")
-	}
-	scannerPool.Put(scanner2)
-
-	// verify pool doesn't panic with concurrent access
-	done := make(chan bool)
-	for range 10 {
-		go func() {
-			s := scannerPool.Get()
-			scannerPool.Put(s)
-			done <- true
-		}()
+	var lines []string
+	for ps.scanner.Scan() {
+		lines = append(lines, ps.scanner.Text())
 	}
 
-	for range 10 {
-		<-done
+	if err := ps.scanner.Err(); err != nil {
+		t.Errorf("Expected no error after reset, got: %v", err)
+	}
+	if strings.Join(lines, ",") != "alpha,beta" {
+		t.Errorf("Expected lines [alpha beta] from the new reader only, got %v", lines)
+	}
+}
+
+// TestScanTextFileAfterFailedScan verifies that a scan which fails does not damage the next scan, whichever
+// pooled scanner the pool hands out. The pool does not promise reuse, so the sequence is repeated.
+func TestScanTextFileAfterFailedScan(t *testing.T) {
+	pattern := regexp.MustCompile("beta")
+
+	for range 20 {
+		_ = scanTextFile(strings.NewReader(strings.Repeat("x", 300*1024)), pattern, "huge.txt", 0)
+
+		matches := scanTextFile(strings.NewReader("alpha\nbeta\ngamma"), pattern, "small.txt", 0)
+
+		if len(matches) != 1 || matches[0].Line != "beta" || matches[0].FileName != "small.txt" {
+			t.Fatalf("Expected one match for 'beta' in small.txt, got %+v", matches)
+		}
+	}
+}
+
+// TestPooledScannerRelease verifies that a released scanner no longer holds the reader it scanned.
+// No parallel test uses scannerPool, so reading ps after release is safe.
+func TestPooledScannerRelease(t *testing.T) {
+	ps := newPooledScanner(strings.NewReader("content"))
+
+	ps.release()
+
+	if ps.scanner != nil {
+		t.Error("Expected release to drop the scanner and its reader")
 	}
 }
