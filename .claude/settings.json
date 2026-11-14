@@ -1,0 +1,49 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(task *)",
+      "Bash(go test *)",
+      "Bash(go vet *)",
+      "Bash(go build *)",
+      "Bash(go list *)",
+      "Bash(go doc *)",
+      "Bash(go env *)",
+      "Bash(go version)",
+      "Bash(gofumpt -l *)",
+      "Bash(golangci-lint run *)",
+      "Bash(golangci-lint version)",
+      "Bash(govulncheck *)",
+      "Bash(command -v *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(git show *)",
+      "Bash(git branch --show-current)",
+      "Edit(**/*_test.go)"
+    ],
+    "ask": [
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(git switch *)",
+      "Bash(git restore *)",
+      "Bash(git merge *)",
+      "Bash(git rebase *)",
+      "Bash(git clean *)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f *)",
+      "Bash(git push * -f)",
+      "Bash(git commit --no-verify*)",
+      "Bash(git commit * --no-verify*)",
+      "Bash(git push --no-verify*)",
+      "Bash(git push * --no-verify*)",
+      "Bash(git reset --hard*)"
+    ]
+  }
+}

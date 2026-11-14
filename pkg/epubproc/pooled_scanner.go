@@ -34,9 +34,17 @@ func (ps *pooledScanner) reset(r io.Reader) {
 	ps.scanner.Buffer(ps.buffer[:0], 256*1024)
 }
 
+// release drops the reference to the last reader and returns the scanner to the pool. Without this, an idle
+// pooled scanner would keep the last zip entry (and its buffers) alive until the next reset.
+func (ps *pooledScanner) release() {
+	ps.scanner = nil
+	scannerPool.Put(ps)
+}
+
 // scannerPool reuses pooledScanner instances to reduce GC pressure during text file scanning. Each reset still
-// allocates a fresh bufio.Scanner, but reuses the pooledScanner's backing buffer, which avoids repeated buffer
-// growth allocations when processing large numbers of text files.
+// allocates a fresh bufio.Scanner, but starts it on the pooledScanner's initial buffer, which avoids repeated
+// buffer growth allocations for typical text files. A scan that needs a larger buffer allocates its own, and that
+// larger buffer is not kept for reuse.
 var scannerPool = sync.Pool{
 	New: func() any {
 		return newPooledScanner(strings.NewReader(""))

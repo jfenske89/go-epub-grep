@@ -3,13 +3,13 @@ package epubproc
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // createTestEPUB creates a minimal test file with specified content
@@ -323,35 +323,38 @@ func TestFileSearchIntegration(t *testing.T) {
 		}
 	})
 
-	// test context with cancellation
+	// cancelling from inside the handler must stop the search before any other file is handled
 	t.Run("ContextCancellation", func(t *testing.T) {
-		fs := NewFileSearch(tempDir, 1, false)
-
-		request := &SearchRequest{
-			Query: SearchRequestQuery{
-				Regex: &SearchRequestRegex{
-					Pattern: "Holmes|Watson",
-				},
-			},
-			Context: 0,
+		dir := t.TempDir()
+		for i := range 5 {
+			if _, err := createTestEPUB(dir, fmt.Sprintf("book%d.epub", i), "<p>Holmes and Watson</p>"); err != nil {
+				t.Fatalf("Failed to create test ePUB: %v", err)
+			}
 		}
 
-		// create context that cancels quickly
-		ctx, cancel := context.WithTimeout(context.Background(), 1*time.Nanosecond)
+		// one worker makes the handler call count deterministic
+		fs := NewFileSearch(dir, 1, false)
+		request := &SearchRequest{
+			Query: SearchRequestQuery{
+				Regex: &SearchRequestRegex{Pattern: "Holmes|Watson"},
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		var results []*SearchResult
-		var mu sync.Mutex
+		var handlerCalls int
 		err := fs.Search(ctx, request, func(result *SearchResult) error {
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
+			handlerCalls++
+			cancel()
 			return nil
 		})
 
-		// should return context error or complete quickly
-		if err != nil && err != context.DeadlineExceeded && err != context.Canceled && !strings.Contains(err.Error(), "context") {
-			t.Errorf("Expected context cancellation error or nil, got: %v", err)
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Expected context.Canceled, got: %v", err)
+		}
+		if handlerCalls != 1 {
+			t.Errorf("Expected handler to run once before cancel took effect, got %d calls", handlerCalls)
 		}
 	})
 }
@@ -405,27 +408,59 @@ func TestFileSearchErrorCases(t *testing.T) {
 		}
 	})
 
-	// test handler error propagation
+	// a handler error must be returned to the caller and stop further work
 	t.Run("HandlerError", func(t *testing.T) {
-		// create a test file
-		createTestEPUB(tempDir, "error_test.epub", "<p>Find this text</p>")
+		dir := t.TempDir()
+		for i := range 5 {
+			if _, err := createTestEPUB(dir, fmt.Sprintf("book%d.epub", i), "<p>Find this text</p>"); err != nil {
+				t.Fatalf("Failed to create test ePUB: %v", err)
+			}
+		}
 
 		request := &SearchRequest{
 			Query: SearchRequestQuery{
-				Text: &SearchRequestText{
-					Value: "Find",
-				},
+				Text: &SearchRequestText{Value: "Find"},
 			},
 		}
 
-		expectedError := fmt.Errorf("handler error")
-		err := fs.Search(ctx, request, func(result *SearchResult) error {
-			// simulate handler error
-			return expectedError
+		errHandler := errors.New("handler error")
+
+		// one worker makes the handler call count deterministic
+		var handlerCalls int
+		err := NewFileSearch(dir, 1, false).Search(ctx, request, func(result *SearchResult) error {
+			handlerCalls++
+			return errHandler
 		})
 
-		if err == nil || err.Error() != expectedError.Error() {
+		if !errors.Is(err, errHandler) {
 			t.Errorf("Expected handler error to be propagated, got: %v", err)
+		}
+		if handlerCalls != 1 {
+			t.Errorf("Expected handler to stop after its first error, got %d calls", handlerCalls)
+		}
+	})
+
+	// a negative context would otherwise cause a slice-bounds panic when building context windows
+	t.Run("NegativeContext", func(t *testing.T) {
+		dir := t.TempDir()
+		if _, err := createTestEPUB(dir, "book.epub", "<p>Find this text</p>"); err != nil {
+			t.Fatalf("Failed to create test ePUB: %v", err)
+		}
+
+		request := &SearchRequest{
+			Query: SearchRequestQuery{
+				Text: &SearchRequestText{Value: "Find"},
+			},
+			Context: -1,
+		}
+
+		err := NewFileSearch(dir, 1, false).Search(ctx, request, func(result *SearchResult) error {
+			t.Error("handler must not run for an invalid request")
+			return nil
+		})
+
+		if err == nil || !strings.Contains(err.Error(), "context must not be negative") {
+			t.Errorf("Expected negative context error, got: %v", err)
 		}
 	})
 

@@ -319,13 +319,38 @@ func TestPerformanceEdgeCases(t *testing.T) {
 		// create a line that's large but within scanner limits
 		longLine := strings.Repeat("x", 100000) + "target" + strings.Repeat("y", 100000)
 		reader := strings.NewReader(longLine)
-		pattern, _ := regexp.Compile("target")
+		pattern := regexp.MustCompile("target")
 
 		matches := scanTextFile(reader, pattern, "huge.txt", 0)
 
-		// very long lines may exceed scanner token limits, verify it doesn't crash
-		if len(matches) > 1 {
-			t.Errorf("Expected 0 or 1 match for extremely long line, got %d", len(matches))
+		// 200 KB is under the 256 KB scanner limit, so the line must be found
+		if len(matches) != 1 {
+			t.Fatalf("Expected exactly 1 match for a line under the scanner limit, got %d", len(matches))
+		}
+		if matches[0].FileName != "huge.txt" {
+			t.Errorf("Expected file name huge.txt, got %q", matches[0].FileName)
+		}
+	})
+
+	// a line over the 256 KB scanner limit cannot be read, so the scan stops there. The line itself gives no match,
+	// but matches found before it are kept.
+	t.Run("LineOverScannerLimit", func(t *testing.T) {
+		longLine := strings.Repeat("x", 200*1024) + "target" + strings.Repeat("y", 200*1024)
+		pattern := regexp.MustCompile("target")
+
+		for _, contextLines := range []int{0, 1} {
+			matches := scanTextFile(strings.NewReader(longLine), pattern, "huge.txt", contextLines)
+
+			if len(matches) != 0 {
+				t.Errorf("context %d: expected no match for a line over the limit, got %d", contextLines, len(matches))
+			}
+
+			withEarlier := "target before the long line\n" + longLine
+			matches = scanTextFile(strings.NewReader(withEarlier), pattern, "huge.txt", contextLines)
+
+			if len(matches) != 1 || !strings.Contains(matches[0].Line, "target before the long line") {
+				t.Errorf("context %d: expected the match before the long line to be kept, got %+v", contextLines, matches)
+			}
 		}
 	})
 

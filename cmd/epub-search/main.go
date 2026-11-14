@@ -3,11 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
+	"os/signal"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -51,14 +57,19 @@ type summaryInfo struct {
 }
 
 func main() {
-	rootCmd := createRootCmd(context.Background())
-	if err := rootCmd.Execute(); err != nil {
+	// Ctrl-C and SIGTERM cancel the context, so a running search stops and returns instead of being killed
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	err := createRootCmd().ExecuteContext(ctx)
+	stop()
+
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func createRootCmd(ctx context.Context) *cobra.Command {
+func createRootCmd() *cobra.Command {
 	flags := &searchFlags{}
 
 	rootCmd := &cobra.Command{
@@ -79,20 +90,20 @@ Supports plain text and regex pattern matching with metadata extraction and filt
   epub-search search -d /path/to/epubs -p "text" --log-level info`,
 	}
 
-	searchCmd := createSearchCmd(ctx, flags)
+	searchCmd := createSearchCmd(flags)
 	rootCmd.AddCommand(searchCmd)
 
 	return rootCmd
 }
 
-func createSearchCmd(ctx context.Context, flags *searchFlags) *cobra.Command {
+func createSearchCmd(flags *searchFlags) *cobra.Command {
 	searchCmd := &cobra.Command{
 		Use:   "search",
 		Short: "Search for text patterns in ePUB files",
 		Long: `Search for text patterns within ePUB files using plain text or regex matching.
 Supports concurrent processing, metadata extraction, and filtering options.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runSearch(ctx, flags)
+			return runSearch(cmd.Context(), flags, cmd.OutOrStdout())
 		},
 	}
 
@@ -107,7 +118,7 @@ func setupSearchFlags(cmd *cobra.Command, flags *searchFlags) {
 
 	// search options
 	cmd.Flags().BoolVar(&flags.isRegex, "regex", false, "Treat pattern as regular expression")
-	cmd.Flags().BoolVarP(&flags.ignoreCase, "ignore-case", "i", false, "Case-insensitive search (text mode only)")
+	cmd.Flags().BoolVarP(&flags.ignoreCase, "ignore-case", "i", false, "Case-insensitive search (plain text and --regex)")
 	cmd.Flags().IntVarP(&flags.context, "context", "c", 0, "Number of context lines around each match")
 
 	// performance options
@@ -132,19 +143,23 @@ func setupSearchFlags(cmd *cobra.Command, flags *searchFlags) {
 	cmd.Flags().StringVar(&flags.logLevel, "log-level", "warn", "Set logging level (disabled, error, warn, info, debug, trace)")
 
 	// enforce required flags
-	if err := cmd.MarkFlagRequired("directory"); err != nil {
-		log.Err(err).Msg("failed to mark directory flag as required")
-	}
-	if err := cmd.MarkFlagRequired("pattern"); err != nil {
-		log.Err(err).Msg("failed to mark pattern flag as required")
+	// these only fail if the flag name is wrong, which is a programming error
+	for _, name := range []string{"directory", "pattern"} {
+		if err := cmd.MarkFlagRequired(name); err != nil {
+			panic(fmt.Sprintf("cannot mark flag %q as required: %v", name, err))
+		}
 	}
 }
 
-func runSearch(ctx context.Context, flags *searchFlags) error {
+func runSearch(ctx context.Context, flags *searchFlags, out io.Writer) error {
 	configureLogging(flags.logLevel)
 
 	if (flags.authorEquals != "" || flags.seriesEquals != "" || flags.titleEquals != "") && !flags.extractMetadata {
-		return fmt.Errorf("metadata filters (--author, --series, --title) require --extract-metadata")
+		return errors.New("metadata filters (--author, --series, --title) require --extract-metadata")
+	}
+
+	if flags.context < 0 {
+		return fmt.Errorf("invalid --context value %d: must be 0 or greater", flags.context)
 	}
 
 	matchMode := epubproc.FilterMatchMode(flags.filterMatch)
@@ -157,8 +172,13 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 		return fmt.Errorf("--filter-match=%s requires at least one of --author, --series, --title", flags.filterMatch)
 	}
 
-	if _, err := os.Stat(flags.epubDir); os.IsNotExist(err) {
-		return fmt.Errorf("directory does not exist: %s", flags.epubDir)
+	info, err := os.Stat(flags.epubDir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("directory does not exist: %s: %w", flags.epubDir, err)
+	} else if err != nil {
+		return fmt.Errorf("cannot access directory %s: %w", flags.epubDir, err)
+	} else if !info.IsDir() {
+		return fmt.Errorf("not a directory: %s", flags.epubDir)
 	}
 
 	request := buildSearchRequest(flags)
@@ -173,7 +193,6 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 		Int("max_threads", flags.maxThreads).
 		Msg("starting ePUB search")
 
-	// collect results with pre-allocated capacity for improved performance
 	results := make([]searchResult, 0, 16)
 	var totalMatches int
 	var mu sync.Mutex
@@ -198,6 +217,11 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 		return fmt.Errorf("search failed: %w", err)
 	}
 
+	// workers finish in no fixed order, so sort to give the same output for the same library
+	slices.SortFunc(results, func(a, b searchResult) int {
+		return strings.Compare(a.Path, b.Path)
+	})
+
 	log.Debug().
 		Int("files_with_matches", len(results)).
 		Int("total_matches", totalMatches).
@@ -211,24 +235,21 @@ func runSearch(ctx context.Context, flags *searchFlags) error {
 			TotalMatches: totalMatches,
 		},
 	}
-	return outputJSON(output, flags.pretty)
+	return outputJSON(out, output, flags.pretty)
 }
 
-func outputJSON(output searchOutput, pretty bool) error {
-	var jsonData []byte
-	var err error
-
+// outputJSON writes the result as one JSON document followed by a newline. HTML characters such as < and & are kept
+// as they are, because book text often has them and the output is not meant for a web page.
+func outputJSON(w io.Writer, output searchOutput, pretty bool) error {
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
 	if pretty {
-		jsonData, err = json.MarshalIndent(output, "", "  ")
-	} else {
-		jsonData, err = json.Marshal(output)
+		encoder.SetIndent("", "  ")
 	}
 
-	if err != nil {
-		return fmt.Errorf("failed to marshal JSON output: %w", err)
+	if err := encoder.Encode(output); err != nil {
+		return fmt.Errorf("failed to write JSON output: %w", err)
 	}
-
-	fmt.Println(string(jsonData))
 	return nil
 }
 
@@ -240,7 +261,8 @@ func buildSearchRequest(flags *searchFlags) *epubproc.SearchRequest {
 	if flags.isRegex {
 		request.Query = epubproc.SearchRequestQuery{
 			Regex: &epubproc.SearchRequestRegex{
-				Pattern: flags.pattern,
+				Pattern:    flags.pattern,
+				IgnoreCase: flags.ignoreCase,
 			},
 		}
 	} else {
@@ -266,32 +288,28 @@ func buildSearchRequest(flags *searchFlags) *epubproc.SearchRequest {
 }
 
 func configureLogging(level string) {
-	level = strings.ToLower(level)
-
-	if level == "disabled" {
-		zerolog.SetGlobalLevel(zerolog.Disabled)
-		return
+	name := strings.ToLower(level)
+	if name == "warning" {
+		// zerolog knows only "warn", but "warning" has always been accepted here
+		name = "warn"
 	}
 
-	// use a standard error console writer to keep the command output processable
-	log.Logger = log.Output(zerolog.ConsoleWriter{
-		Out:        os.Stderr,
-		TimeFormat: "15:04:05",
-	})
+	parsed, err := zerolog.ParseLevel(name)
+	unknown := err != nil || parsed == zerolog.NoLevel
+	if unknown {
+		parsed = zerolog.WarnLevel
+	}
 
-	switch level {
-	case "trace":
-		zerolog.SetGlobalLevel(zerolog.TraceLevel)
-	case "debug":
-		zerolog.SetGlobalLevel(zerolog.DebugLevel)
-	case "info":
-		zerolog.SetGlobalLevel(zerolog.InfoLevel)
-	case "warn", "warning":
-		zerolog.SetGlobalLevel(zerolog.WarnLevel)
-	case "error":
-		zerolog.SetGlobalLevel(zerolog.ErrorLevel)
-	default:
-		zerolog.SetGlobalLevel(zerolog.WarnLevel)
+	if parsed != zerolog.Disabled {
+		// use a standard error console writer to keep the command output processable
+		log.Logger = log.Output(zerolog.ConsoleWriter{
+			Out:        os.Stderr,
+			TimeFormat: "15:04:05",
+		})
+	}
+
+	zerolog.SetGlobalLevel(parsed)
+	if unknown {
 		log.Warn().Str("log_level", level).Msg("unknown log level - falling back to WARN")
 	}
 }

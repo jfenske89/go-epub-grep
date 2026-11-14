@@ -124,7 +124,7 @@ epub-search search \
 | `--directory`        | `-d`  | Directory containing ePUB files                          | ✓        |
 | `--pattern`          | `-p`  | Search pattern (text or regex)                           | ✓        |
 | `--regex`            |       | Treat pattern as regular expression                      |          |
-| `--ignore-case`      | `-i`  | Case-insensitive search (text mode only)                 |          |
+| `--ignore-case`      | `-i`  | Case-insensitive search (plain text and `--regex`)       |          |
 | `--context`          | `-c`  | Number of context lines around matches                   |          |
 | `--threads`          | `-t`  | Maximum worker threads (default: CPU cores)              |          |
 | `--extract-metadata` |       | Extract and include metadata in results                  |          |
@@ -243,3 +243,24 @@ This project follows Go best practices and emphasizes:
 - Concurrent-safe operations
 - Memory-efficient processing
 - Extensive test coverage
+
+## AI Use Disclaimer
+
+This project uses [Claude Code](https://claude.com/claude-code), an AI coding assistant, to help with development.
+
+How it is used:
+
+- Claude helps with planning, code review, tests, documentation, and code changes when the maintainer asks for them.
+- The maintainer reviews and is responsible for all changes. AI output is not trusted without review, tests, and
+  linting.
+- Claude stages, commits, and pushes only when the maintainer asks. It never force pushes or rewrites history on its own.
+- Read-only review agents check security, performance, Go conventions, and test quality. They report findings and do
+  not edit files.
+- A separate test-writing agent edits only test files and test fixtures.
+
+The rules for these tools are public in the repository:
+
+- [`CLAUDE.md`](./CLAUDE.md): project instructions for the assistant
+- [`.claude/`](./.claude/): agents, the Go conventions skill, and permission settings
+
+AI tools can make mistakes. If you find a bug or a problem in the code, please open an issue.

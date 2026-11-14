@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -30,7 +31,7 @@ func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, co
 		}
 	}()
 
-	fileToChapter := make(map[string]string, 10)
+	var fileToChapter map[string]string
 
 	var matches []Match
 
@@ -46,6 +47,13 @@ func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, co
 		}
 	}
 
+	if fileToChapter == nil {
+		fileToChapter = make(map[string]string, 10)
+	}
+
+	// the combined size of the files that are scanned, checked against limits.total
+	var scannedSize int64
+
 	// process all other files
 	for _, f := range r.File {
 		if f.FileInfo().IsDir() {
@@ -54,7 +62,7 @@ func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, co
 
 		// secondary chapter processing
 		if strings.Contains(strings.ToLower(f.Name), "content.opf") {
-			processContentOpf(f, fileToChapter)
+			processContentOPF(f, fileToChapter)
 			continue
 		}
 
@@ -69,23 +77,43 @@ func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, co
 		default:
 		}
 
+		kind := getFileType(f.Name)
+		if kind == fileTypeOther {
+			// images, styles and fonts have no text to search
+			continue
+		}
+
+		// a file or an epub over the limits is treated as an error for the whole book, because skipping only
+		// part of it would return results that look complete
+		if err := checkEntrySize(f, limits.content); err != nil {
+			return nil, fmt.Errorf("epub '%s': %w", epubPath, err)
+		}
+		scannedSize += declaredSize(f)
+		if scannedSize > limits.total {
+			return nil, fmt.Errorf("epub '%s' has more than %d bytes of text: %w", epubPath, limits.total, errEntryTooLarge)
+		}
+
 		rc, err := f.Open()
 		if err != nil {
-			log.Warn().Str("file", f.Name).
+			log.Warn().Err(err).
+				Str("file", f.Name).
 				Str("epub", epubPath).
 				Msg("failed to open file in epub")
 			continue
 		}
 
+		// the declared size was checked above, so this cap only matters if the zip reader ever stops enforcing it
+		reader := newLimitedReader(rc, limits.content)
+
 		var fileMatches []Match
-		switch getFileType(f.Name) {
-		case "text":
-			fileMatches = scanTextFile(rc, pattern, f.Name, contextLines)
-		case "html":
-			fileMatches = scanHTMLFile(ctx, rc, pattern, f.Name, contextLines)
+		switch kind {
+		case fileTypeText:
+			fileMatches = scanTextFile(reader, pattern, f.Name, contextLines)
+		case fileTypeHTML:
+			fileMatches = scanHTMLFile(ctx, reader, pattern, f.Name, contextLines)
 		}
 
-		// Close the file immediately after processing
+		// close the file immediately after processing
 		if err := rc.Close(); err != nil {
 			log.Warn().Err(err).
 				Str("file", f.Name).
@@ -95,25 +123,30 @@ func grepInEpub(ctx context.Context, epubPath string, pattern *regexp.Regexp, co
 		matches = append(matches, fileMatches...)
 	}
 
-	for i := range matches {
-		match := matches[i]
+	// scanHTMLFile stops quietly when the context ends, so a cancelled scan would look like "no matches"
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
+	for i := range matches {
 		// get the base file name
-		paths := strings.Split(match.FileName, "/")
+		paths := strings.Split(matches[i].FileName, "/")
 		baseName := paths[len(paths)-1]
 
 		if fn, ok := fileToChapter[baseName]; ok {
-			match.Metadata = &MatchMetadata{
-				Chapter: &fn,
-			}
-			matches[i] = match
+			matches[i].Metadata = &MatchMetadata{Chapter: &fn}
 		}
 	}
 
 	return matches, nil
 }
 
-func processXmlFile(f *zip.File, handler func(xmlBytes []byte)) {
+func processXMLFile(f *zip.File, handler func(xmlBytes []byte)) {
+	if err := checkEntrySize(f, limits.xml); err != nil {
+		log.Warn().Err(err).Str("file", f.Name).Msg("skipping file in epub that is too large")
+		return
+	}
+
 	rc, err := f.Open()
 	if err != nil {
 		log.Warn().Err(err).
@@ -129,7 +162,7 @@ func processXmlFile(f *zip.File, handler func(xmlBytes []byte)) {
 		}
 	}()
 
-	xmlBytes, err := io.ReadAll(rc)
+	xmlBytes, err := io.ReadAll(newLimitedReader(rc, limits.xml))
 	if err != nil {
 		log.Warn().Err(err).
 			Str("file", f.Name).
@@ -142,7 +175,7 @@ func processXmlFile(f *zip.File, handler func(xmlBytes []byte)) {
 
 func processTableOfContents(f *zip.File) map[string]string {
 	fileToChapter := make(map[string]string, 10)
-	processXmlFile(f, func(xmlBytes []byte) {
+	processXMLFile(f, func(xmlBytes []byte) {
 		var ncx epub.Ncx
 		if err := xml.Unmarshal(xmlBytes, &ncx); err != nil {
 			log.Warn().Err(err).
@@ -157,10 +190,13 @@ func processTableOfContents(f *zip.File) map[string]string {
 			fileToChapter[baseName] = np.Text
 
 			// remove anchor tags as an alternative lookup
+			// the first heading in a file wins, and an entry that names the file itself is never replaced
 			if strings.Contains(baseName, "#") {
 				hashes := strings.Split(baseName, "#")
 				altKey := hashes[0]
-				fileToChapter[altKey] = np.Text
+				if _, ok := fileToChapter[altKey]; !ok {
+					fileToChapter[altKey] = np.Text
+				}
 			}
 		}
 	})
@@ -168,8 +204,8 @@ func processTableOfContents(f *zip.File) map[string]string {
 	return fileToChapter
 }
 
-func processContentOpf(f *zip.File, fileToChapter map[string]string) {
-	processXmlFile(f, func(xmlBytes []byte) {
+func processContentOPF(f *zip.File, fileToChapter map[string]string) {
+	processXMLFile(f, func(xmlBytes []byte) {
 		var opf epub.Opf
 		if err := xml.Unmarshal(xmlBytes, &opf); err != nil {
 			log.Warn().Err(err).
@@ -190,14 +226,11 @@ func processContentOpf(f *zip.File, fileToChapter map[string]string) {
 
 // scanTextFile scans a plain text file for pattern matches.
 func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextLines int) []Match {
+	// the pool's New function only creates *pooledScanner, so this assertion cannot fail
 	pooledSc := scannerPool.Get().(*pooledScanner)
-	defer scannerPool.Put(pooledSc)
+	defer pooledSc.release()
 	pooledSc.reset(r)
 	scanner := pooledSc.scanner
-
-	// use sliding window approach for memory efficiency
-	lines := make([]string, 0, 512)    // pre-allocate for ~512 lines (reduces reallocations)
-	matchedLines := make([]int, 0, 16) // pre-allocate for expected matched lines
 
 	// for files without context, we can process line by line
 	if contextLines == 0 {
@@ -213,12 +246,15 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 			}
 		}
 
+		// a line over the scanner limit stops the scan, but the matches found before it are still valid
 		if err := scanner.Err(); err != nil {
-			log.Error().Err(err).Str("file", fileName).Msg("error scanning text file")
-			return nil
+			log.Error().Err(err).Str("file", fileName).Msg("error scanning text file, returning matches found so far")
 		}
 		return matches
 	}
+
+	lines := make([]string, 0, 512)    // pre-allocate for ~512 lines (reduces reallocations)
+	matchedLines := make([]int, 0, 16) // pre-allocate for expected matched lines
 
 	// compile list of lines and identify matching lines
 	for i := 0; scanner.Scan(); i++ {
@@ -231,8 +267,7 @@ func scanTextFile(r io.Reader, pattern *regexp.Regexp, fileName string, contextL
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Error().Err(err).Str("file", fileName).Msg("error scanning text file")
-		return nil
+		log.Error().Err(err).Str("file", fileName).Msg("error scanning text file, returning matches found so far")
 	}
 
 	return createContextMatches(matchedLines, lines, fileName, contextLines)
@@ -245,15 +280,6 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 	var currentLine strings.Builder
 	currentLine.Grow(512) // pre-allocate for typical line length
 
-	isBlockLevelTag := func(tagName string) bool {
-		switch tagName {
-		case "p", "div", "br", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "hr", "pre", "tr", "table":
-			return true
-		default:
-			return false
-		}
-	}
-
 	flushLine := func() {
 		// normalize whitespace by splitting on fields and rejoining with single spaces
 		// this correctly handles text from multiple tags and removes extra whitespace
@@ -263,6 +289,9 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 		}
 		currentLine.Reset()
 	}
+
+	// text inside <script> and <style> is code, not book text, so it must not be searchable
+	inCode := false
 
 	tokenCount := 0
 	for {
@@ -279,7 +308,7 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 		tt := tokenizer.Next()
 		if tt == html.ErrorToken {
 			// io.EOF is expected at the end of the file.
-			if tokenizer.Err() != io.EOF {
+			if !errors.Is(tokenizer.Err(), io.EOF) {
 				log.Error().Err(tokenizer.Err()).Str("file", fileName).Msg("error tokenizing html")
 			}
 			break
@@ -287,14 +316,24 @@ func scanHTMLFile(ctx context.Context, r io.Reader, pattern *regexp.Regexp, file
 
 		switch tt {
 		case html.TextToken:
-			// add a space before the text to ensure separation between words from adjacent tags
-			// the final whitespace normalization will handle any extra spaces
-			currentLine.WriteString(" ")
-			currentLine.WriteString(string(tokenizer.Text()))
+			if inCode {
+				break
+			}
+
+			// do not add a space between text tokens: inline tags such as <i> or <span> can split one
+			// word or phrase ("<span>T</span>he"), and a space would stop a search for it from matching.
+			// the source text already has the spaces that belong between words, and block tags flush the line.
+			currentLine.Write(tokenizer.Text())
 
 		case html.StartTagToken, html.EndTagToken, html.SelfClosingTagToken:
+			// the second value only says whether the tag has attributes, which does not matter here
 			tagName, _ := tokenizer.TagName()
-			if isBlockLevelTag(string(tagName)) {
+			name := string(tagName)
+
+			if name == "script" || name == "style" {
+				inCode = tt == html.StartTagToken
+			}
+			if isBlockLevelTag(name) {
 				flushLine()
 			}
 		}
@@ -382,42 +421,62 @@ func createContextMatches(matchedLines []int, lines []string, fileName string, c
 	return matches
 }
 
+// fileType says how a file inside an epub is scanned.
+type fileType int
+
+const (
+	fileTypeOther fileType = iota
+	fileTypeText
+	fileTypeHTML
+)
+
 // getFileType determines the file type for content scanning based on file extension.
-func getFileType(name string) string {
+func getFileType(name string) fileType {
 	ext := strings.ToLower(filepath.Ext(name))
 	switch ext {
 	case ".txt":
-		return "text"
+		return fileTypeText
 	case ".html", ".xhtml", ".xml":
-		return "html"
+		return fileTypeHTML
 	default:
-		return ""
+		return fileTypeOther
 	}
+}
+
+// isBlockLevelTag reports whether a tag ends the current line of text.
+func isBlockLevelTag(tagName string) bool {
+	switch tagName {
+	case "p", "div", "br", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "hr", "pre", "tr", "table",
+		"td", "th", "dt", "dd", "section", "figcaption":
+		return true
+	default:
+		return false
+	}
+}
+
+// skippedFileNames are standard epub navigation and metadata files that are not book text.
+var skippedFileNames = []string{
+	"cover.xhtml", "toc.xhtml", "titlepage.xhtml", "copyright.xhtml",
+	"imprint.xhtml", "dedication.xhtml", "dedication-1.xhtml",
+	"license.xhtml", "license-1.xhtml", "colophon.xhtml",
+	"about.xhtml", "about-1.xhtml", "acknowledgments.xhtml",
+	"appendix.xhtml", "afterword.xhtml", "notes.xhtml",
+	"bibliography.xhtml", "index.xhtml", "epilogue.xhtml",
+	"glossary.xhtml", "extra.xhtml", "ads.xhtml", "trailer.xhtml",
 }
 
 // shouldSkipFile determines whether a file should be excluded from content scanning.
 func shouldSkipFile(fileName string) bool {
-	// Normalize the file name to lowercase for comparison
+	// compare in lowercase so that "Mimetype" or "COVER.XHTML" are treated like the standard names
 	lowerName := strings.ToLower(fileName)
 	baseName := strings.ToLower(filepath.Base(fileName))
 
 	// skip epub metadata files
-	if fileName == "mimetype" || fileName == "META-INF/container.xml" {
+	if lowerName == "mimetype" || lowerName == "meta-inf/container.xml" {
 		return true
 	}
 
-	// Skip standard epub navigation and metadata files
-	skipFiles := []string{
-		"cover.xhtml", "toc.xhtml", "titlepage.xhtml", "copyright.xhtml",
-		"imprint.xhtml", "dedication.xhtml", "dedication-1.xhtml",
-		"license.xhtml", "license-1.xhtml", "colophon.xhtml",
-		"about.xhtml", "about-1.xhtml", "acknowledgments.xhtml",
-		"appendix.xhtml", "afterword.xhtml", "notes.xhtml",
-		"bibliography.xhtml", "index.xhtml", "epilogue.xhtml",
-		"glossary.xhtml", "extra.xhtml", "ads.xhtml", "trailer.xhtml",
-	}
-
-	if slices.Contains(skipFiles, baseName) {
+	if slices.Contains(skippedFileNames, baseName) {
 		return true
 	}
 
